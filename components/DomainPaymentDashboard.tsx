@@ -24,7 +24,6 @@ import {
   Lock,
   Globe,
   Check,
-  ShieldAlert,
 } from "lucide-react";
 import { domainPaymentItems, DomainPaymentInfo } from "@/lib/utils";
 import { toast } from "sonner";
