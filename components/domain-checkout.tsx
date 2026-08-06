@@ -48,16 +48,16 @@ export default function DomainCheckout() {
   if (isPurchased) redirect("/success");
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-purple-50 to-violet-50 py-6 px-4">
-      <div className="max-w-7xl mx-auto space-y-6">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-purple-50 to-violet-50 py-4 sm:py-8 px-3 sm:px-6">
+      <div className="max-w-7xl mx-auto space-y-5 sm:space-y-6">
         {/* User Info & Portal Header */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 bg-white/40 backdrop-blur-xs p-4 rounded-2xl border border-white/60 shadow-xs">
           <div>
-            <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
-              <Globe className="h-7 w-7 text-purple-600" />
-              Hostingate Domain Payment Portal
+            <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
+              <Globe className="h-6 w-6 sm:h-7 sm:w-7 text-purple-600 shrink-0" />
+              <span>Hostingate Domain Payment Portal</span>
             </h1>
-            <p className="text-slate-500 text-xs mt-0.5">
+            <p className="text-slate-500 text-xs sm:text-sm mt-1">
               Manage top domain renewal deadlines, auto-pay options, and manual renewal checkouts.
             </p>
           </div>
@@ -65,7 +65,7 @@ export default function DomainCheckout() {
           {userEmail && (
             <Badge
               variant="secondary"
-              className="bg-white/90 text-slate-700 border border-slate-200 px-3 py-1.5 shadow-sm text-xs w-fit"
+              className="bg-white/90 text-slate-700 border border-slate-200 px-3 py-1.5 shadow-xs text-xs w-fit shrink-0 self-start sm:self-auto"
             >
               <Database className="h-3.5 w-3.5 mr-1.5 text-purple-600" />
               Signed in: {userEmail}
@@ -77,8 +77,8 @@ export default function DomainCheckout() {
         <DomainPaymentDashboard />
 
         {/* Trust Badges */}
-        <div className="mt-8 text-center">
-          <div className="flex flex-wrap justify-center items-center gap-3">
+        <div className="mt-6 sm:mt-8 text-center">
+          <div className="flex flex-wrap justify-center items-center gap-2 sm:gap-3">
             {[
               { icon: Shield, text: "PCI DSS Compliant" },
               { icon: Database, text: "Secure Hosting" },
@@ -87,9 +87,9 @@ export default function DomainCheckout() {
             ].map((item, index) => (
               <div
                 key={index}
-                className="flex items-center text-slate-600 bg-white/60 px-3 py-1.5 rounded-full text-xs"
+                className="flex items-center text-slate-600 bg-white/70 backdrop-blur-xs border border-slate-200/60 px-3 py-1.5 rounded-full text-xs font-medium shadow-2xs"
               >
-                <item.icon className="h-3 w-3 mr-1 text-purple-500" />
+                <item.icon className="h-3.5 w-3.5 mr-1.5 text-purple-500 shrink-0" />
                 {item.text}
               </div>
             ))}

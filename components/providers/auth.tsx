@@ -47,6 +47,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     try {
       const { data, error } = await supabase
+      .schema("domain")
         .from("domain_is_purchased")
         .select("id, code, email, purchased")
         .eq("code", code.trim())

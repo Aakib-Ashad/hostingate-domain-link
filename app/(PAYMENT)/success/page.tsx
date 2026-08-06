@@ -3,135 +3,70 @@
 import { useState, useEffect } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { CheckCircle, Zap, Shield, TrendingUp, Rocket } from "lucide-react";
+import { CheckCircle, Zap, Shield, Globe, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { createBrowserClient } from "@/utils/supabase/client";
-import { useAuth } from "@/components/providers/auth";
+import Link from "next/link";
 
 export default function SuccessPage() {
-  const { logout } = useAuth();
-  const [, setEmail] = useState<string>("your email");
+  const [email, setEmail] = useState<string>("domain@hostingate.com");
   const [amount, setAmount] = useState<number>(0);
-  const [codeCopySuccess, setCodeCopySuccess] = useState(false);
-  const [projectID, setProjectID] = useState<string | null>(null);
+  const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
+  const [domainName, setDomainName] = useState<string>("sckali.com");
+  const [nextPaymentDate, setNextPaymentDate] = useState<string>("");
   const [loading, setLoading] = useState(true);
 
   const supabase = createBrowserClient();
 
-  // Generate random code
-  function generateAlphaNumericCode(length = 12): string {
-    const chars =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    return Array.from({ length }, () =>
-      chars.charAt(Math.floor(Math.random() * chars.length)),
-    ).join("");
-  }
-
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const e = params.get("email");
+    const e = params.get("email") || "domain@hostingate.com";
     const a = params.get("amount");
-    const paymentIntentId = params.get("payment_intent");
+    const pi = params.get("payment_intent");
 
-    const fetchOrInsertPurchase = async () => {
+    const fetchPaymentDetails = async () => {
       try {
-        if (e && a) {
-          // Email & amount from URL — store or fetch
-          const { data: existing, error: fetchError } = await supabase
-            .from("email_is_purchased")
-            .select("id, code")
-            .eq("email", e)
-            .order("created_at", { ascending: false })
-            .limit(1)
-            .maybeSingle();
+        setEmail(e);
+        if (a) setAmount(Number(a));
+        if (pi) setPaymentIntentId(pi);
 
-          if (fetchError && fetchError.code !== "PGRST116") {
-            console.error("Error fetching purchase:", fetchError.message);
-            return;
-          }
+        // Fetch latest transaction details from domain.stripe_payments
+        let query = supabase
+          .schema("domain")
+          .from("stripe_payments")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(1);
 
-          if (existing) {
-            setProjectID(existing.code);
-          } else {
-            let stripeCustomerId = null;
-
-            if (paymentIntentId) {
-              try {
-                const res = await fetch(
-                  `/api/payment/retrieve?payment_intent_id=${paymentIntentId}`
-                );
-                if (res.ok) {
-                  const details = await res.json();
-                  stripeCustomerId = details.customerId;
-                }
-              } catch (err) {
-                console.error("Error fetching Stripe details:", err);
-              }
-            }
-
-            const newCode = generateAlphaNumericCode();
-            const { error: insertError } = await supabase
-              .from("email_is_purchased")
-              .insert({
-                email: e,
-                amount: Number(a),
-                purchased: true,
-                code: newCode,
-                stripe_customer_id: stripeCustomerId,
-              });
-
-            if (insertError) {
-              console.error("Error inserting purchase:", insertError.message);
-              return;
-            }
-            setProjectID(newCode);
-          }
-
-          setEmail(e);
-          setAmount(Number(a));
-        } else {
-          // No email/amount in URL — fetch latest from table
-          const { data: latest, error: latestError } = await supabase
-            .from("email_is_purchased")
-            .select("email, amount, code")
-            .order("created_at", { ascending: false })
-            .limit(1)
-            .maybeSingle();
-
-          if (latestError) {
-            console.error(
-              "Error fetching latest purchase:",
-              latestError.message,
-            );
-            return;
-          }
-
-          if (latest) {
-            setEmail(latest.email);
-            setAmount(latest.amount ?? 0);
-            setProjectID(latest.code);
-          }
+        if (pi) {
+          query = query.eq("payment_intent_id", pi);
+        } else if (e) {
+          query = query.eq("user_email", e);
         }
+
+        const { data: transaction } = await query.maybeSingle();
+
+        if (transaction) {
+          setAmount(transaction.amount_usd ?? Number(a) ?? 97.99);
+          setPaymentIntentId(transaction.payment_intent_id);
+          setDomainName(transaction.domain_name);
+          setNextPaymentDate(transaction.next_payment_date);
+        }
+      } catch (err) {
+        console.error("Error fetching payment success details:", err);
       } finally {
         setLoading(false);
       }
     };
 
-    fetchOrInsertPurchase();
+    fetchPaymentDetails();
   }, [supabase]);
-
-  const handleCodeCopy = () => {
-    if (!projectID) return;
-    navigator.clipboard
-      .writeText(projectID)
-      .then(() => setCodeCopySuccess(true));
-  };
 
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-purple-50 to-violet-50">
         <p className="text-purple-600 font-semibold animate-pulse">
-          Loading purchase details...
+          Loading domain renewal receipt...
         </p>
       </div>
     );
@@ -139,93 +74,91 @@ export default function SuccessPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-purple-50 to-violet-50 py-6 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-4xl mx-auto text-center">
-        {/* Confirmation Card */}
-        <Card className="border-0 shadow-xl p-0 bg-white/80 backdrop-blur-sm">
-          <CardHeader className="bg-gradient-to-r h-[45] from-purple-500 via-purple-600 to-purple-800 text-white rounded-t-lg">
-            <CardTitle className="flex items-center justify-between py-2 text-lg">
-              <span className="flex items-center">
-                <CheckCircle className="h-5 w-5 mr-2" />
-                Project Scaling Plan Activated
+      <div className="max-w-2xl mx-auto text-center w-full">
+        {/* Domain Renewal Confirmation Card */}
+        <Card className="border-0 shadow-xl p-0 bg-white/90 backdrop-blur-sm overflow-hidden rounded-2xl">
+          <CardHeader className="bg-gradient-to-r from-violet-600 via-purple-600 to-indigo-700 text-white p-6">
+            <CardTitle className="flex items-center justify-between text-xl">
+              <span className="flex items-center gap-2">
+                <CheckCircle className="h-6 w-6 text-emerald-300" />
+                Domain Renewal Successful
               </span>
               <Badge
                 variant="secondary"
-                className="bg-purple-500 text-white px-2 py-0.5 text-xs"
+                className="bg-white/20 text-white border-0 px-3 py-1 text-xs"
               >
-                <Rocket className="h-3 w-3 mr-1" />
-                Growth Ready
+                Active Subscription
               </Badge>
             </CardTitle>
           </CardHeader>
-          <CardContent className="p-6 space-y-6">
-            {/* Project ID */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-              <div className="text-left">
-                <h2 className="text-lg font-semibold text-slate-800 mb-2 flex items-center">
-                  <Zap className="h-4 w-4 mr-2 text-purple-500" />
-                  Paid Amount
-                </h2>
-                <div className="bg-purple-50/50 p-4 border border-purple-200 rounded-lg text-purple-700 font-bold text-xl">
-                  ${amount.toLocaleString()}
-                </div>
+          <CardContent className="p-6 sm:p-8 space-y-6">
+            {/* Domain & Amount Breakdown */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="text-left bg-slate-50 p-4 border border-slate-200/80 rounded-xl">
+                <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                  <Globe className="h-4 w-4 text-purple-600" />
+                  Domain Renewed
+                </h3>
+                <p className="text-lg font-bold text-slate-900">{domainName}</p>
+                <p className="text-xs text-slate-500 mt-1">Email: {email}</p>
               </div>
-              <div className="text-left">
-                <h2 className="text-lg font-semibold text-slate-800 mb-2 flex items-center">
-                  <TrendingUp className="h-4 w-4 mr-2 text-purple-500" />
-                  Project ID
-                </h2>
-                <div className="flex items-center justify-between bg-purple-50/50 p-4 border border-purple-200 rounded-lg">
-                  <span className="text-purple-700 font-medium">
-                    {projectID}
-                  </span>
-                  <Button size="sm" variant="outline" onClick={handleCodeCopy}>
-                    {codeCopySuccess ? "Copied!" : "Copy"}
-                  </Button>
-                </div>
-              </div>
-            </div>
 
-            {/* Amount */}
-
-            {/* Success Message */}
-            <div className="text-left">
-              <div className="bg-purple-50/50 p-4 border border-purple-200 rounded-lg text-purple-800 font-medium">
-                Payment successful! Your project scaling plan has been
-                activated. Login to your dashboard to access advanced growth
-                tools and resources to scale your project to new heights.
+              <div className="text-left bg-slate-50 p-4 border border-slate-200/80 rounded-xl">
+                <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                  <Zap className="h-4 w-4 text-purple-600" />
+                  Amount Paid
+                </h3>
+                <p className="text-2xl font-bold text-purple-700">
+                  ${amount.toFixed(2)} USD
+                </p>
+                {nextPaymentDate && (
+                  <p className="text-xs text-slate-500 mt-1">
+                    Next Due: {nextPaymentDate}
+                  </p>
+                )}
               </div>
             </div>
 
-            {/* Feature badges */}
-            <div className="text-left">
-              <h3 className="text-lg font-semibold text-slate-800 mb-2 flex items-center">
-                <Shield className="h-4 w-4 mr-2 text-purple-500" />
-                Scaling Features Activated
-              </h3>
-              <div className="flex flex-wrap gap-4">
-                <Badge className="items-center text-xs gap-1 rounded-full px-2 py-1 bg-purple-500/15 text-purple-700 border border-purple-300">
-                  <TrendingUp className="h-3 w-3" /> Growth Analytics
+            {/* Payment Intent & Status */}
+            {paymentIntentId && (
+              <div className="text-left bg-purple-50/50 p-4 border border-purple-200/60 rounded-xl space-y-1">
+                <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider">
+                  Stripe Payment Intent ID
+                </p>
+                <p className="text-xs font-mono font-medium text-purple-800 break-all">
+                  {paymentIntentId}
+                </p>
+              </div>
+            )}
+
+            {/* Feature Badges */}
+            <div className="text-left space-y-3">
+              <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                Services Included
+              </h4>
+              <div className="flex flex-wrap gap-2">
+                <Badge className="items-center text-xs gap-1 rounded-lg px-2.5 py-1 bg-purple-100 text-purple-800 border-0">
+                  <Shield className="h-3 w-3 text-purple-600" /> SSL Certificate Active
                 </Badge>
-                <Badge className="items-center text-xs gap-1 rounded-full px-2 py-1 bg-purple-500/15 text-purple-700 border border-purple-300">
-                  <Zap className="h-3 w-3" /> Performance Boost
+                <Badge className="items-center text-xs gap-1 rounded-lg px-2.5 py-1 bg-purple-100 text-purple-800 border-0">
+                  <CheckCircle className="h-3 w-3 text-purple-600" /> WHOIS Privacy Protection
                 </Badge>
-                <Badge className="items-center text-xs gap-1 rounded-full px-2 py-1 bg-purple-500/15 text-purple-700 border border-purple-300">
-                  <Shield className="h-3 w-3" /> Priority Support
-                </Badge>
-                <Badge className="items-center text-xs gap-1 rounded-full px-2 py-1 bg-purple-500/15 text-purple-700 border border-purple-300">
-                  <Rocket className="h-3 w-3" /> Scaling Tools
+                <Badge className="items-center text-xs gap-1 rounded-lg px-2.5 py-1 bg-purple-100 text-purple-800 border-0">
+                  <Globe className="h-3 w-3 text-purple-600" /> Auto-Renewal Protection
                 </Badge>
               </div>
             </div>
 
-            {/* Button */}
-            <div className="mt-6 text-center">
+            {/* Action Button */}
+            <div className="pt-4">
               <Button
+                asChild
                 size="lg"
-                className="w-full h-12 bg-gradient-to-r from-purple-500 via-purple-600 to-purple-700 hover:from-purple-600 hover:via-purple-700 hover:to-purple-800 text-white font-bold text-lg shadow-xl shadow-purple-500/25 transition-all duration-300"
-                onClick={logout}
+                className="w-full h-12 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-semibold text-base shadow-lg shadow-purple-500/20 transition-all rounded-xl"
               >
-                Log out
+                <Link href="/">
+                  Return to Domain Dashboard <ArrowRight className="ml-2 h-4 w-4" />
+                </Link>
               </Button>
             </div>
           </CardContent>
