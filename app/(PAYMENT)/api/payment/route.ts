@@ -104,21 +104,11 @@ export async function POST(req: Request) {
           card: { token: "tok_visa" },
           billing_details: { email: userEmail, name: "Hostingate Customer" },
         });
-        await stripe.paymentMethods.attach(pm.id, { customer: customerId });
         targetPmId = pm.id;
-      }
-    } else {
-      // Attach target payment method to customer if not attached
-      try {
-        await stripe.paymentMethods.attach(targetPmId, { customer: customerId });
-      } catch (e: any) {
-        if (!e.message?.includes("already attached")) {
-          console.warn("Payment method attach warning:", e.message);
-        }
       }
     }
 
-    // Retrieve card details from Stripe API
+    // Retrieve card details & owner customer from Stripe API
     let brand = "visa";
     let last4 = "4242";
     let expMonth = 12;
@@ -126,6 +116,19 @@ export async function POST(req: Request) {
 
     try {
       const pmDetails = await stripe.paymentMethods.retrieve(targetPmId);
+      if (typeof pmDetails.customer === "string" && pmDetails.customer) {
+        customerId = pmDetails.customer;
+      } else {
+        // Unattached payment method: attach to customer
+        try {
+          await stripe.paymentMethods.attach(targetPmId, { customer: customerId });
+        } catch (attachErr: any) {
+          if (!attachErr.message?.includes("already attached")) {
+            console.warn("Payment method attach notice:", attachErr.message);
+          }
+        }
+      }
+
       if (pmDetails.card) {
         brand = pmDetails.card.brand || "visa";
         last4 = pmDetails.card.last4 || "4242";

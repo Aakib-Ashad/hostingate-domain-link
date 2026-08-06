@@ -304,6 +304,27 @@ export const domainPaymentItems: DomainPaymentInfo[] = [
     domainProtectionEnabled: true,
     domainProtectionPrice: 49,
   },
+  {
+    id: "dom-11",
+    domain: "test",
+    fullDomainName: "test.com",
+    type: "main",
+    vercel: true,
+    supabase: false,
+    resend: true,
+    fixer: true,
+    dueDate: "2026-08-07",
+    daysRemaining: 1,
+    renewalPrice: 19.99,
+    status: "closer_to_due",
+    autoPayEnabled: false,
+    autoPayMethod: "•••• 4242",
+    periodYears: 1,
+    lastPaymentDate: "2026-08-06",
+    sslPrice: 29,
+    domainProtectionEnabled: true,
+    domainProtectionPrice: 49,
+  },
 ];
 
 
