@@ -42,7 +42,7 @@ import {
   updateDomainProtectionInDb,
   updateDomainToaInDb,
   fetchUserPaymentMethods,
-  savePaymentMethodToDb,
+  // savePaymentMethodToDb,
   setPrimaryPaymentMethodInDb,
   deletePaymentMethodFromDb,
   fetchDomainSubscriptions,
@@ -124,14 +124,14 @@ export default function DomainPaymentDashboard() {
   const [setNewCardAsPrimary, setSetNewCardAsPrimary] = useState(false);
 
   // New Card Form Details
-  const [newCardForm, setNewCardForm] = useState({
-    number: "",
-    holderName: "",
-    expMonth: "",
-    expYear: "",
-    cvc: "",
-    brand: "visa" as "visa" | "mastercard" | "amex" | "discover",
-  });
+  // const [newCardForm, setNewCardForm] = useState({
+  //   number: "",
+  //   holderName: "",
+  //   expMonth: "",
+  //   expYear: "",
+  //   cvc: "",
+  //   brand: "visa" as "visa" | "mastercard" | "amex" | "discover",
+  // });
 
   // Card Manager Dialog State
   const [isCardManagerOpen, setIsCardManagerOpen] = useState(false);
@@ -245,110 +245,110 @@ export default function DomainPaymentDashboard() {
   };
 
   // Add New Card Handler (Updates State & Saves to Supabase)
-  const handleAddNewCard = async (setAsPrimary: boolean): Promise<PaymentMethodItem | null> => {
-    const cleanNumber = newCardForm.number.replace(/\s+/g, "");
-    if (!cleanNumber || cleanNumber.length < 13 || cleanNumber.length > 19) {
-      toast.error("Invalid Card Number", {
-        description: "Please enter a valid card number (13-19 digits).",
-      });
-      return null;
-    }
+  // const handleAddNewCard = async (setAsPrimary: boolean): Promise<PaymentMethodItem | null> => {
+  //   const cleanNumber = newCardForm.number.replace(/\s+/g, "");
+  //   if (!cleanNumber || cleanNumber.length < 13 || cleanNumber.length > 19) {
+  //     toast.error("Invalid Card Number", {
+  //       description: "Please enter a valid card number (13-19 digits).",
+  //     });
+  //     return null;
+  //   }
 
-    if (!newCardForm.holderName.trim()) {
-      toast.error("Missing Cardholder Name", {
-        description: "Please enter the cardholder name.",
-      });
-      return null;
-    }
+  //   if (!newCardForm.holderName.trim()) {
+  //     toast.error("Missing Cardholder Name", {
+  //       description: "Please enter the cardholder name.",
+  //     });
+  //     return null;
+  //   }
 
-    let month = parseInt(newCardForm.expMonth, 10);
-    if (isNaN(month) || month < 1 || month > 12) {
-      toast.error("Invalid Expiration Month", {
-        description: "Please enter a valid month (01-12).",
-      });
-      return null;
-    }
+  //   const month = parseInt(newCardForm.expMonth, 10);
+  //   if (isNaN(month) || month < 1 || month > 12) {
+  //     toast.error("Invalid Expiration Month", {
+  //       description: "Please enter a valid month (01-12).",
+  //     });
+  //     return null;
+  //   }
 
-    let year = parseInt(newCardForm.expYear, 10);
-    if (isNaN(year)) {
-      toast.error("Invalid Expiration Year", {
-        description: "Please enter a valid expiration year (e.g. 2028 or 28).",
-      });
-      return null;
-    }
+  //   let year = parseInt(newCardForm.expYear, 10);
+  //   if (isNaN(year)) {
+  //     toast.error("Invalid Expiration Year", {
+  //       description: "Please enter a valid expiration year (e.g. 2028 or 28).",
+  //     });
+  //     return null;
+  //   }
 
-    if (year < 100) {
-      year += 2000;
-    }
+  //   if (year < 100) {
+  //     year += 2000;
+  //   }
 
-    const currentYear = new Date().getFullYear();
-    const currentMonth = new Date().getMonth() + 1;
+  //   const currentYear = new Date().getFullYear();
+  //   const currentMonth = new Date().getMonth() + 1;
 
-    if (year < currentYear || (year === currentYear && month < currentMonth)) {
-      toast.error("Card Expired", {
-        description: "The expiration date entered is in the past.",
-      });
-      return null;
-    }
+  //   if (year < currentYear || (year === currentYear && month < currentMonth)) {
+  //     toast.error("Card Expired", {
+  //       description: "The expiration date entered is in the past.",
+  //     });
+  //     return null;
+  //   }
 
-    const last4 = cleanNumber.slice(-4);
-    const brand =
-      newCardForm.brand ||
-      (cleanNumber.startsWith("34") || cleanNumber.startsWith("37")
-        ? "amex"
-        : cleanNumber.startsWith("5")
-        ? "mastercard"
-        : cleanNumber.startsWith("6")
-        ? "discover"
-        : "visa");
+  //   const last4 = cleanNumber.slice(-4);
+  //   const brand =
+  //     newCardForm.brand ||
+  //     (cleanNumber.startsWith("34") || cleanNumber.startsWith("37")
+  //       ? "amex"
+  //       : cleanNumber.startsWith("5")
+  //         ? "mastercard"
+  //         : cleanNumber.startsWith("6")
+  //           ? "discover"
+  //           : "visa");
 
-    const newCardTemp: PaymentMethodItem = {
-      id: `pm-${Date.now()}`,
-      brand,
-      last4,
-      expMonth: month,
-      expYear: year,
-      isPrimary: setAsPrimary || savedCards.length === 0,
-      holderName: newCardForm.holderName.trim(),
-    };
+  //   const newCardTemp: PaymentMethodItem = {
+  //     id: `pm-${Date.now()}`,
+  //     brand,
+  //     last4,
+  //     expMonth: month,
+  //     expYear: year,
+  //     isPrimary: setAsPrimary || savedCards.length === 0,
+  //     holderName: newCardForm.holderName.trim(),
+  //   };
 
-    // Save Card directly into Supabase domain.payment_methods table
-    const savedDbCard = await savePaymentMethodToDb(newCardTemp, userEmail);
-    const newCard = savedDbCard || newCardTemp;
+  //   // Save Card directly into Supabase domain.payment_methods table
+  //   const savedDbCard = await savePaymentMethodToDb(newCardTemp, userEmail);
+  //   const newCard = savedDbCard || newCardTemp;
 
-    setSavedCards((prev) => {
-      if (setAsPrimary) {
-        return [...prev.map((c) => ({ ...c, isPrimary: false })), newCard];
-      }
-      return [...prev, newCard];
-    });
+  //   setSavedCards((prev) => {
+  //     if (setAsPrimary) {
+  //       return [...prev.map((c) => ({ ...c, isPrimary: false })), newCard];
+  //     }
+  //     return [...prev, newCard];
+  //   });
 
-    if (setAsPrimary) {
-      setDomainsList((prev) =>
-        prev.map((item) =>
-          item.autoPayEnabled
-            ? { ...item, autoPayMethod: `•••• ${last4}` }
-            : item
-        )
-      );
-    }
+  //   if (setAsPrimary) {
+  //     setDomainsList((prev) =>
+  //       prev.map((item) =>
+  //         item.autoPayEnabled
+  //           ? { ...item, autoPayMethod: `•••• ${last4}` }
+  //           : item
+  //       )
+  //     );
+  //   }
 
-    setSelectedPaymentMethodId(newCard.id);
+  //   setSelectedPaymentMethodId(newCard.id);
 
-    // Reset Form
-    setNewCardForm({
-      number: "",
-      holderName: "",
-      expMonth: "",
-      expYear: "",
-      cvc: "",
-      brand: "visa",
-    });
+  //   // Reset Form
+  //   setNewCardForm({
+  //     number: "",
+  //     holderName: "",
+  //     expMonth: "",
+  //     expYear: "",
+  //     cvc: "",
+  //     brand: "visa",
+  //   });
 
-    toast.success("New Payment Card Added!");
+  //   toast.success("New Payment Card Added!");
 
-    return newCard;
-  };
+  //   return newCard;
+  // };
 
   // Delete Saved Card Handler (Updates State & Deletes from Supabase)
   const handleDeleteCard = async (cardId: string) => {
@@ -455,10 +455,10 @@ export default function DomainPaymentDashboard() {
       prev.map((item) =>
         item.id === id
           ? {
-              ...item,
-              autoPayEnabled: nextState,
-              autoPayMethod,
-            }
+            ...item,
+            autoPayEnabled: nextState,
+            autoPayMethod,
+          }
           : item
       )
     );
@@ -724,6 +724,7 @@ export default function DomainPaymentDashboard() {
   const filteredUrgent = filterBySearch(urgentDomains);
   const filteredExpiring = filterBySearch(expiringDomains);
   const filteredHealthy = filterBySearch(healthyDomains);
+  const hide = false;
 
   return (
     <div className="max-w-6xl mx-auto space-y-4 sm:space-y-6">
@@ -746,8 +747,8 @@ export default function DomainPaymentDashboard() {
           <button
             onClick={() => setActiveTab("all")}
             className={`px-3 py-1.5 rounded-lg transition-all shrink-0 ${activeTab === "all"
-                ? "bg-white text-slate-900 font-bold shadow-xs"
-                : "text-slate-600 hover:text-slate-900"
+              ? "bg-white text-slate-900 font-bold shadow-xs"
+              : "text-slate-600 hover:text-slate-900"
               }`}
           >
             All ({domainsList.length})
@@ -755,8 +756,8 @@ export default function DomainPaymentDashboard() {
           <button
             onClick={() => setActiveTab("urgent")}
             className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 shrink-0 ${activeTab === "urgent"
-                ? "bg-red-600 text-white font-bold shadow-xs"
-                : "text-red-600 hover:bg-red-50"
+              ? "bg-red-600 text-white font-bold shadow-xs"
+              : "text-red-600 hover:bg-red-50"
               }`}
           >
             <span className="h-1.5 w-1.5 rounded-full bg-red-400 animate-pulse" />
@@ -765,8 +766,8 @@ export default function DomainPaymentDashboard() {
           <button
             onClick={() => setActiveTab("expiring")}
             className={`px-3 py-1.5 rounded-lg transition-all shrink-0 ${activeTab === "expiring"
-                ? "bg-amber-500 text-white font-bold shadow-xs"
-                : "text-amber-700 hover:bg-amber-50"
+              ? "bg-amber-500 text-white font-bold shadow-xs"
+              : "text-amber-700 hover:bg-amber-50"
               }`}
           >
             Expiring ({expiringDomains.length})
@@ -774,8 +775,8 @@ export default function DomainPaymentDashboard() {
           <button
             onClick={() => setActiveTab("healthy")}
             className={`px-3 py-1.5 rounded-lg transition-all shrink-0 ${activeTab === "healthy"
-                ? "bg-emerald-600 text-white font-bold shadow-xs"
-                : "text-emerald-700 hover:bg-emerald-50"
+              ? "bg-emerald-600 text-white font-bold shadow-xs"
+              : "text-emerald-700 hover:bg-emerald-50"
               }`}
           >
             Healthy ({healthyDomains.length})
@@ -800,18 +801,20 @@ export default function DomainPaymentDashboard() {
               </strong>
             </span>
           </Button>
+          {hide && (
 
-          {/* <Button
-            onClick={handleRunAutoPayNow}
-            disabled={isRunningAutoPay}
-            variant="outline"
-            size="sm"
-            className="border-emerald-200 text-emerald-700 hover:bg-emerald-50 text-xs font-bold rounded-xl h-10 px-3 flex items-center justify-center gap-1.5 flex-1 sm:flex-none"
-            title="Trigger Auto-Pay Off-Session Charges via Stripe for Auto-Pay Enabled Domains"
-          >
-            <Zap className={`h-4 w-4 text-emerald-600 ${isRunningAutoPay ? "animate-spin" : ""}`} />
-            <span className="truncate">{isRunningAutoPay ? "Auto-Paying..." : "Run Auto-Pay"}</span>
-          </Button> */}
+            <Button
+              onClick={handleRunAutoPayNow}
+              disabled={isRunningAutoPay}
+              variant="outline"
+              size="sm"
+              className="border-emerald-200 text-emerald-700 hover:bg-emerald-50 text-xs font-bold rounded-xl h-10 px-3 flex items-center justify-center gap-1.5 flex-1 sm:flex-none"
+              title="Trigger Auto-Pay Off-Session Charges via Stripe for Auto-Pay Enabled Domains"
+            >
+              <Zap className={`h-4 w-4 text-emerald-600 ${isRunningAutoPay ? "animate-spin" : ""}`} />
+              <span className="truncate">{isRunningAutoPay ? "Auto-Paying..." : "Run Auto-Pay"}</span>
+            </Button>
+          )}
 
           {selectedDomainIds.length > 0 && (
             <Button
@@ -985,19 +988,19 @@ export default function DomainPaymentDashboard() {
                     <div
                       key={card.id}
                       className={`p-3 sm:p-3.5 rounded-xl border flex flex-col xs:flex-row xs:items-center justify-between gap-2.5 transition-all ${expired
-                          ? "border-red-200 bg-red-50/40"
-                          : card.isPrimary
-                            ? "border-emerald-300 bg-emerald-50/40 shadow-2xs"
-                            : "border-slate-200 bg-slate-50/50"
+                        ? "border-red-200 bg-red-50/40"
+                        : card.isPrimary
+                          ? "border-emerald-300 bg-emerald-50/40 shadow-2xs"
+                          : "border-slate-200 bg-slate-50/50"
                         }`}
                     >
                       <div className="flex items-center space-x-3">
                         <div
                           className={`p-2.5 rounded-lg shrink-0 ${expired
-                              ? "bg-red-500 text-white"
-                              : card.isPrimary
-                                ? "bg-emerald-600 text-white"
-                                : "bg-slate-200 text-slate-700"
+                            ? "bg-red-500 text-white"
+                            : card.isPrimary
+                              ? "bg-emerald-600 text-white"
+                              : "bg-slate-200 text-slate-700"
                             }`}
                         >
                           <CreditCard className="h-4 w-4" />
@@ -1029,35 +1032,35 @@ export default function DomainPaymentDashboard() {
                         </div>
                       </div>
 
-                  <div className="flex items-center space-x-1.5 self-end xs:self-auto">
-                    {!card.isPrimary ? (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleSetPrimaryCard(card.id)}
-                        className="h-7 text-[10px] font-bold border-purple-200 text-purple-700 hover:bg-purple-50 rounded-lg px-2"
-                      >
-                        Set Primary
-                      </Button>
-                    ) : null}
+                      <div className="flex items-center space-x-1.5 self-end xs:self-auto">
+                        {!card.isPrimary ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleSetPrimaryCard(card.id)}
+                            className="h-7 text-[10px] font-bold border-purple-200 text-purple-700 hover:bg-purple-50 rounded-lg px-2"
+                          >
+                            Set Primary
+                          </Button>
+                        ) : null}
 
-                    <button
-                      type="button"
-                      disabled={card.isPrimary || savedCards.length <= 1}
-                      onClick={() => handleDeleteCard(card.id)}
-                      className={`p-1.5 rounded-lg transition-all ${card.isPrimary || savedCards.length <= 1
-                          ? "text-slate-300 cursor-not-allowed"
-                          : "text-red-500 hover:bg-red-50 hover:text-red-700"
-                        }`}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
-              );
-            })
-          )}
+                        <button
+                          type="button"
+                          disabled={card.isPrimary || savedCards.length <= 1}
+                          onClick={() => handleDeleteCard(card.id)}
+                          className={`p-1.5 rounded-lg transition-all ${card.isPrimary || savedCards.length <= 1
+                            ? "text-slate-300 cursor-not-allowed"
+                            : "text-red-500 hover:bg-red-50 hover:text-red-700"
+                            }`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
 
             {/* Add New Card Section */}
@@ -1240,15 +1243,15 @@ export default function DomainPaymentDashboard() {
                         key={card.id}
                         onClick={() => setSelectedPaymentMethodId(card.id)}
                         className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between ${isSelected
-                            ? "border-purple-600 bg-purple-50/50 shadow-xs"
-                            : "border-slate-200 hover:border-slate-300 bg-white"
+                          ? "border-purple-600 bg-purple-50/50 shadow-xs"
+                          : "border-slate-200 hover:border-slate-300 bg-white"
                           }`}
                       >
                         <div className="flex items-center space-x-3">
                           <div
                             className={`p-2 rounded-lg ${isSelected
-                                ? "bg-purple-600 text-white"
-                                : "bg-slate-100 text-slate-600"
+                              ? "bg-purple-600 text-white"
+                              : "bg-slate-100 text-slate-600"
                               }`}
                           >
                             <CreditCard className="h-4 w-4" />
@@ -1285,8 +1288,8 @@ export default function DomainPaymentDashboard() {
                           )}
                           <div
                             className={`h-4 w-4 rounded-full border flex items-center justify-center ${isSelected
-                                ? "border-purple-600 bg-purple-600 text-white"
-                                : "border-slate-300"
+                              ? "border-purple-600 bg-purple-600 text-white"
+                              : "border-slate-300"
                               }`}
                           >
                             {isSelected && <Check className="h-3 w-3 stroke-[3]" />}
@@ -1396,10 +1399,10 @@ function SimpleDomainRow({
     <motion.div layout transition={{ duration: 0.15 }}>
       <div
         className={`bg-white rounded-xl p-3 sm:p-4 border transition-all space-y-2.5 ${isUrgent
-            ? "border-red-200 hover:border-red-300 shadow-xs"
-            : isExpiring
-              ? "border-amber-200 hover:border-amber-300 shadow-xs"
-              : "border-slate-200/70 hover:border-slate-300"
+          ? "border-red-200 hover:border-red-300 shadow-xs"
+          : isExpiring
+            ? "border-amber-200 hover:border-amber-300 shadow-xs"
+            : "border-slate-200/70 hover:border-slate-300"
           }`}
       >
         {/* Main Row Content */}
@@ -1410,8 +1413,8 @@ function SimpleDomainRow({
               <button
                 onClick={onToggleSelect}
                 className={`flex items-center justify-center h-4 w-4 rounded border transition-all shrink-0 ${isSelected
-                    ? "bg-purple-600 border-purple-600 text-white"
-                    : "border-slate-300 bg-white hover:border-purple-400"
+                  ? "bg-purple-600 border-purple-600 text-white"
+                  : "border-slate-300 bg-white hover:border-purple-400"
                   }`}
               >
                 {isSelected && <Check className="h-3 w-3 stroke-[3]" />}
@@ -1458,8 +1461,8 @@ function SimpleDomainRow({
                     key={yr}
                     onClick={() => onUpdatePeriod(yr)}
                     className={`px-1.5 sm:px-2 py-0.5 rounded-md font-semibold transition-all ${domain.periodYears === yr
-                        ? "bg-white text-purple-700 shadow-2xs"
-                        : "text-slate-500 hover:text-slate-800"
+                      ? "bg-white text-purple-700 shadow-2xs"
+                      : "text-slate-500 hover:text-slate-800"
                       }`}
                   >
                     {yr} {yr === 1 ? "Yr" : "Yrs"}
@@ -1508,8 +1511,8 @@ function SimpleDomainRow({
                   onClick={onPayNow}
                   size="sm"
                   className={`text-xs font-bold rounded-lg px-2.5 sm:px-3 py-1 h-8 transition-all ${isUrgent
-                      ? "bg-red-600 hover:bg-red-700 text-white"
-                      : "bg-purple-600 hover:bg-purple-700 text-white"
+                    ? "bg-red-600 hover:bg-red-700 text-white"
+                    : "bg-purple-600 hover:bg-purple-700 text-white"
                     }`}
                 >
                   Pay Now
@@ -1534,53 +1537,55 @@ function SimpleDomainRow({
             </div>
             <span className="font-bold text-emerald-700 ml-1">+$29/yr</span>
           </div>
-          {/* Domain Protection */}
-          {!isHealthy ? (
-            <button
-              onClick={onToggleProtection}
-              className={`flex items-center justify-between xs:justify-start space-x-1.5 px-2.5 py-1 rounded-lg border font-medium transition-all ${domain.domainProtectionEnabled
+          <div className="flex flex-col lg:flex-row border-t border-slate-100/80 items-stretch xs:items-center justify-between gap-2 text-[10px] sm:text-[11px]">
+            {/* Domain Protection */}
+            {!isHealthy ? (
+              <button
+                onClick={onToggleProtection}
+                className={`flex items-center justify-between xs:justify-start space-x-1.5 px-2.5 py-1 rounded-lg border font-medium transition-all ${domain.domainProtectionEnabled
                   ? "bg-indigo-50/70 border-indigo-200 text-indigo-900 shadow-2xs"
                   : "bg-slate-50 border-slate-200 text-slate-400 hover:bg-slate-100"
-                }`}
-            >
-              <div className="flex items-center space-x-1.5">
-                <ShieldCheck className={`h-3 w-3 ${domain.domainProtectionEnabled ? "text-indigo-600" : "text-slate-400"} shrink-0`} />
-                <span>Domain Protection</span>
+                  }`}
+              >
+                <div className="flex items-center space-x-1.5">
+                  <ShieldCheck className={`h-3 w-3 ${domain.domainProtectionEnabled ? "text-indigo-600" : "text-slate-400"} shrink-0`} />
+                  <span>Domain Protection</span>
+                </div>
+                <span className={`font-bold ml-1 ${domain.domainProtectionEnabled ? "text-indigo-700" : "text-slate-400"}`}>
+                  +$49/yr
+                </span>
+              </button>
+            ) : (
+              <div className="flex items-center space-x-1 text-slate-400 text-[10px]">
+                <ShieldCheck className="h-3 w-3 text-emerald-600 shrink-0" />
+                <span>Domain Protection ($49/yr Active)</span>
               </div>
-              <span className={`font-bold ml-1 ${domain.domainProtectionEnabled ? "text-indigo-700" : "text-slate-400"}`}>
-                +$49/yr
-              </span>
-            </button>
-          ) : (
-            <div className="flex items-center space-x-1 text-slate-400 text-[10px]">
-              <ShieldCheck className="h-3 w-3 text-emerald-600 shrink-0" />
-              <span>Domain Protection ($49/yr Active)</span>
-            </div>
-          )}
+            )}
 
-          {/* TOA (Total Ownership Assurance) */}
-          {!isHealthy ? (
-            <button
-              onClick={onToggleToa}
-              className={`flex items-center justify-between xs:justify-start space-x-1.5 px-2.5 py-1 rounded-lg border font-medium transition-all ${(domain.toaEnabled ?? true)
+            {/* TOA (Total Ownership Assurance) */}
+            {!isHealthy ? (
+              <button
+                onClick={onToggleToa}
+                className={`flex items-center justify-between xs:justify-start space-x-1.5 px-2.5 py-1 rounded-lg border font-medium transition-all ${(domain.toaEnabled ?? true)
                   ? "bg-purple-50/70 border-purple-200 text-purple-900 shadow-2xs"
                   : "bg-slate-50 border-slate-200 text-slate-400 hover:bg-slate-100"
-                }`}
-            >
-              <div className="flex items-center space-x-1.5">
-                <ShieldCheck className={`h-3 w-3 ${(domain.toaEnabled ?? true) ? "text-purple-600" : "text-slate-400"} shrink-0`} />
-                <span>TOA (Total Ownership Assurance)</span>
+                  }`}
+              >
+                <div className="flex items-center space-x-1.5">
+                  <ShieldCheck className={`h-3 w-3 ${(domain.toaEnabled ?? true) ? "text-purple-600" : "text-slate-400"} shrink-0`} />
+                  <span>TOA (Total Ownership Assurance)</span>
+                </div>
+                <span className={`font-bold ml-1 ${(domain.toaEnabled ?? true) ? "text-purple-700" : "text-slate-400"}`}>
+                  +$500/yr
+                </span>
+              </button>
+            ) : (
+              <div className="flex items-center space-x-1 text-slate-400 text-[10px]">
+                <ShieldCheck className="h-3 w-3 text-purple-600 shrink-0" />
+                <span>TOA ($500/yr Active)</span>
               </div>
-              <span className={`font-bold ml-1 ${(domain.toaEnabled ?? true) ? "text-purple-700" : "text-slate-400"}`}>
-                +$500/yr
-              </span>
-            </button>
-          ) : (
-            <div className="flex items-center space-x-1 text-slate-400 text-[10px]">
-              <ShieldCheck className="h-3 w-3 text-purple-600 shrink-0" />
-              <span>TOA ($500/yr Active)</span>
-            </div>
-          )}
+            )}
+          </div>
 
         </div>
       </div>
