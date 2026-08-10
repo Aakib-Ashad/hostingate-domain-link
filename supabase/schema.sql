@@ -84,7 +84,7 @@ CREATE INDEX IF NOT EXISTS idx_domain_subscriptions_next_payment_date ON domain.
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS domain.stripe_payments (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    payment_intent_id VARCHAR(255) NOT NULL UNIQUE,
+    payment_intent_id VARCHAR(255) NOT NULL,
     stripe_customer_id VARCHAR(255) NOT NULL,
     user_email VARCHAR(255) NOT NULL,
     domain_id VARCHAR(100) NOT NULL,
@@ -103,8 +103,14 @@ CREATE TABLE IF NOT EXISTS domain.stripe_payments (
     paid_at TIMESTAMPTZ DEFAULT NOW(),
     next_payment_date DATE NOT NULL, -- Date when next payment is due after this transaction
     metadata JSONB,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT stripe_payments_pi_domain_key UNIQUE (payment_intent_id, domain_id)
 );
+
+-- Migration statement for existing databases to support bulk payments:
+ALTER TABLE domain.stripe_payments DROP CONSTRAINT IF EXISTS stripe_payments_payment_intent_id_key;
+ALTER TABLE domain.stripe_payments DROP CONSTRAINT IF EXISTS stripe_payments_pi_domain_key;
+ALTER TABLE domain.stripe_payments ADD CONSTRAINT stripe_payments_pi_domain_key UNIQUE (payment_intent_id, domain_id);
 
 -- Indexes for transaction history lookup
 CREATE INDEX IF NOT EXISTS idx_stripe_payments_user_email ON domain.stripe_payments(user_email);
@@ -164,3 +170,45 @@ GRANT USAGE ON SCHEMA domain TO postgres, anon, authenticated, service_role;
 GRANT ALL ON ALL TABLES IN SCHEMA domain TO postgres, anon, authenticated, service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA domain TO postgres, anon, authenticated, service_role;
 GRANT ALL ON ALL ROUTINES IN SCHEMA domain TO postgres, anon, authenticated, service_role;
+
+-- ----------------------------------------------------------------------------
+-- AUTOMATIC DOMAIN SUBSCRIPTION STATUS UPDATER FUNCTION & PG_CRON SCHEDULE
+-- Recalculates status based on next_payment_date:
+--   'due'            -> next_payment_date <= CURRENT_DATE
+--   'closer_to_due'  -> next_payment_date > CURRENT_DATE AND next_payment_date <= CURRENT_DATE + INTERVAL '30 days'
+--   'already_paid'   -> next_payment_date > CURRENT_DATE + INTERVAL '30 days'
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION domain.update_domain_subscription_statuses()
+RETURNS VOID AS $$
+BEGIN
+    -- 1. Mark domains due today or overdue as 'due'
+    UPDATE domain.domain_subscriptions
+    SET status = 'due'
+    WHERE next_payment_date <= CURRENT_DATE
+      AND status != 'due';
+
+    -- 2. Mark domains expiring within 30 days as 'closer_to_due'
+    UPDATE domain.domain_subscriptions
+    SET status = 'closer_to_due'
+    WHERE next_payment_date > CURRENT_DATE
+      AND next_payment_date <= (CURRENT_DATE + INTERVAL '30 days')
+      AND status != 'closer_to_due';
+
+    -- 3. Mark domains with > 30 days remaining as 'already_paid'
+    UPDATE domain.domain_subscriptions
+    SET status = 'already_paid'
+    WHERE next_payment_date > (CURRENT_DATE + INTERVAL '30 days')
+      AND status != 'already_paid';
+END;
+$$ LANGUAGE plpgsql;
+
+-- Enable pg_cron extension in Supabase
+CREATE EXTENSION IF NOT EXISTS pg_cron WITH SCHEMA extensions;
+
+-- Schedule status recalculation job to run daily at midnight (00:00 UTC)
+SELECT cron.schedule(
+    'update-domain-subscription-statuses-daily',
+    '0 0 * * *',
+    $$ SELECT domain.update_domain_subscription_statuses(); $$
+);
+

@@ -92,6 +92,32 @@ export interface PaymentMethodItem {
 
 export const initialPaymentMethods: PaymentMethodItem[] = [];
 
+/**
+ * Helper function to check if a card is expired
+ */
+export function isCardExpired(expMonth: number, expYear: number): boolean {
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1; // 1-indexed (Jan = 1)
+
+  if (expYear < currentYear) return true;
+  if (expYear === currentYear && expMonth < currentMonth) return true;
+  return false;
+}
+
+/**
+ * Helper function to check if a card is expiring within 30 days
+ */
+export function isCardExpiringSoon(expMonth: number, expYear: number): boolean {
+  if (isCardExpired(expMonth, expYear)) return false;
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
+
+  if (expYear === currentYear && expMonth === currentMonth) return true;
+  return false;
+}
+
 export interface DomainPaymentInfo extends DomainInfo {
   id: string;
   fullDomainName: string;

@@ -82,53 +82,100 @@ export async function POST(req: Request) {
         }
       }
 
-      const paidAt = new Date().toISOString();
-      const nextDateObj = new Date();
-      nextDateObj.setFullYear(nextDateObj.getFullYear() + periodYears);
-      const nextPaymentDate = nextDateObj.toISOString().split("T")[0];
+      // Parse items from metadata if available (bulk or single domain payment)
+      let itemsToProcess: Array<{ id: string; name: string; years: number; amountUsd: number }> = [];
+      if (metadata.items_json) {
+        try {
+          itemsToProcess = JSON.parse(metadata.items_json);
+        } catch {
+          // Fallback if items_json parsing fails
+        }
+      }
 
-      // Upsert transaction in domain.stripe_payments
-      await supabase.from("stripe_payments").upsert(
-        {
-          payment_intent_id: paymentIntent.id,
-          stripe_customer_id: customerId,
-          user_email: userEmail,
-          domain_id: domainId,
-          domain_name: domainName,
-          amount_cents: paymentIntent.amount,
-          amount_usd: paymentIntent.amount / 100,
-          currency: paymentIntent.currency || "usd",
-          period_years: periodYears,
-          payment_method_id: paymentMethodId,
-          card_brand: cardBrand,
-          card_last4: cardLast4,
-          status: "succeeded",
-          is_auto_pay: metadata.auto_pay === "true",
-          paid_at: paidAt,
-          next_payment_date: nextPaymentDate,
-          metadata: metadata as any,
-        } as any,
-        { onConflict: "payment_intent_id" }
-      );
+      if (!itemsToProcess.length) {
+        itemsToProcess = [
+          {
+            id: domainId,
+            name: domainName,
+            years: periodYears,
+            amountUsd: paymentIntent.amount / 100,
+          },
+        ];
+      }
 
-      // Update domain.domain_subscriptions
-      await supabase.from("domain_subscriptions").upsert(
-        {
-          domain_id: domainId,
-          full_domain_name: domainName,
-          user_email: userEmail,
-          status: "already_paid",
-          period_years: periodYears,
-          auto_pay_enabled: metadata.auto_pay === "true",
-          auto_pay_method: `•••• ${cardLast4}`,
-          auto_pay_method_id: pmUuid,
-          last_payment_date: paidAt.split("T")[0],
-          next_payment_date: nextPaymentDate,
-        } as any,
-        { onConflict: "full_domain_name" }
-      );
+      for (const item of itemsToProcess) {
+        const itemYears = item.years || periodYears;
+        const itemPaidAt = new Date().toISOString();
+        const nextDateObj = new Date();
+        nextDateObj.setFullYear(nextDateObj.getFullYear() + itemYears);
+        const nextPaymentDate = nextDateObj.toISOString().split("T")[0];
 
-      console.log(`Successfully processed payment_intent.succeeded for domain: ${domainName}`);
+        try {
+          // Upsert transaction in domain.stripe_payments (composite key payment_intent_id, domain_id allows multi-domain bulk payments)
+          const { error: paymentErr } = await supabase.from("stripe_payments").upsert(
+            {
+              payment_intent_id: paymentIntent.id,
+              stripe_customer_id: customerId,
+              user_email: userEmail,
+              domain_id: item.id,
+              domain_name: item.name,
+              amount_cents: Math.round(item.amountUsd * 100),
+              amount_usd: item.amountUsd,
+              currency: paymentIntent.currency || "usd",
+              period_years: itemYears,
+              payment_method_id: paymentMethodId,
+              card_brand: cardBrand,
+              card_last4: cardLast4,
+              status: "succeeded",
+              is_auto_pay: metadata.auto_pay === "true",
+              paid_at: itemPaidAt,
+              next_payment_date: nextPaymentDate,
+              metadata: metadata as any,
+            } as any,
+            { onConflict: "payment_intent_id, domain_id" }
+          );
+
+          if (paymentErr) {
+            console.error("Webhook stripe_payments upsert error:", paymentErr.message);
+          }
+        } catch (err: any) {
+          console.error("Exception upserting stripe_payments in webhook:", err?.message || err);
+        }
+
+        try {
+          // Update domain.domain_subscriptions
+          const subPayload: any = {
+            domain_id: item.id,
+            full_domain_name: item.name,
+            user_email: userEmail,
+            status: "already_paid",
+            period_years: itemYears,
+            auto_pay_enabled: metadata.auto_pay === "true",
+            auto_pay_method: `•••• ${cardLast4}`,
+            auto_pay_method_id: pmUuid,
+            last_payment_date: itemPaidAt.split("T")[0],
+            next_payment_date: nextPaymentDate,
+          };
+
+          if ((item as any).renewalPrice !== undefined) subPayload.renewal_price = (item as any).renewalPrice;
+          if ((item as any).sslPrice !== undefined) subPayload.ssl_price = (item as any).sslPrice;
+          if ((item as any).domainProtectionEnabled !== undefined) subPayload.domain_protection_enabled = (item as any).domainProtectionEnabled;
+          if ((item as any).domainProtectionPrice !== undefined) subPayload.domain_protection_price = (item as any).domainProtectionPrice;
+
+          const { error: subErr } = await supabase.from("domain_subscriptions").upsert(
+            subPayload,
+            { onConflict: "full_domain_name" }
+          );
+
+          if (subErr) {
+            console.error("Webhook domain_subscriptions upsert error:", subErr.message);
+          }
+        } catch (err: any) {
+          console.error("Exception upserting domain_subscriptions in webhook:", err?.message || err);
+        }
+
+        console.log(`Successfully processed payment_intent.succeeded for domain: ${item.name}`);
+      }
       break;
     }
 

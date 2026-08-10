@@ -5,12 +5,10 @@ import { Badge } from "@/components/ui/badge";
 import { Shield, Lock, Zap, Database, Globe } from "lucide-react";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import LoadingSkeleton from "./LoadingSkeleton";
-import { redirect } from "next/navigation";
 import DomainPaymentDashboard from "./DomainPaymentDashboard";
 
 export default function DomainCheckout() {
   const [isLoading, setIsLoading] = useState(true);
-  const [isPurchased, setIsPurchased] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
 
   const supabase = createClientComponentClient();
@@ -23,18 +21,8 @@ export default function DomainCheckout() {
       if (session?.user?.email) {
         setUserEmail(session.user.email);
       }
-
-      const { data: existing } = await supabase
-        .from("email_is_purchased")
-        .select("*")
-        .eq("purchased", true)
-        .single();
-
-      if (existing) {
-        setIsPurchased(true);
-      }
     } catch (error) {
-      console.error("Error checking purchase status:", error);
+      console.error("Error fetching session:", error);
     }
   };
 
@@ -45,7 +33,6 @@ export default function DomainCheckout() {
   }, []);
 
   if (isLoading) return <LoadingSkeleton />;
-  if (isPurchased) redirect("/success");
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-purple-50 to-violet-50 py-4 sm:py-8 px-3 sm:px-6">

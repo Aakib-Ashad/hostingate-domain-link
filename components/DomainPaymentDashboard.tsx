@@ -32,6 +32,8 @@ import {
   DomainPaymentInfo,
   PaymentMethodItem,
   initialPaymentMethods,
+  isCardExpired,
+  isCardExpiringSoon,
 } from "@/lib/utils";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
@@ -138,6 +140,14 @@ export default function DomainPaymentDashboard() {
       return;
     }
 
+    if (isCardExpired(primaryCard.expMonth, primaryCard.expYear)) {
+      toast.error("Primary Card Expired", {
+        description: "Your primary card has expired. Please add or set a valid primary card to execute Auto-Pay.",
+      });
+      setIsCardManagerOpen(true);
+      return;
+    }
+
     setIsRunningAutoPay(true);
     try {
       const res = await fetch("/api/stripe/auto-pay", {
@@ -194,6 +204,13 @@ export default function DomainPaymentDashboard() {
   const handleSetPrimaryCard = async (cardId: string) => {
     const targetCard = savedCards.find((c) => c.id === cardId);
     if (!targetCard) return;
+
+    if (isCardExpired(targetCard.expMonth, targetCard.expYear)) {
+      toast.error("Cannot Set Expired Card", {
+        description: "This payment card has expired. Please add a valid card to use as your Primary Auto-Pay method.",
+      });
+      return;
+    }
 
     setSavedCards((prev) =>
       prev.map((card) => ({
@@ -497,6 +514,10 @@ export default function DomainPaymentDashboard() {
         domainName: item.fullDomainName,
         periodYears: item.periodYears,
         amountUsd: getDomainItemTotal(item),
+        renewalPrice: item.renewalPrice,
+        sslPrice: item.sslPrice,
+        domainProtectionEnabled: item.domainProtectionEnabled,
+        domainProtectionPrice: item.domainProtectionPrice,
       }));
 
       const paymentRes = await fetch("/api/payment", {
@@ -508,6 +529,10 @@ export default function DomainPaymentDashboard() {
           domainId: checkoutItems[0]?.id || "dom-1",
           domainName: checkoutItems[0]?.fullDomainName || "sckali.com",
           periodYears: checkoutItems[0]?.periodYears || 1,
+          renewalPrice: checkoutItems[0]?.renewalPrice,
+          sslPrice: checkoutItems[0]?.sslPrice,
+          domainProtectionEnabled: checkoutItems[0]?.domainProtectionEnabled,
+          domainProtectionPrice: checkoutItems[0]?.domainProtectionPrice,
           paymentMethodId: activeCard?.id,
           autoPayEnabled: autoPayOnCheckout,
           items: itemsPayload,
@@ -676,7 +701,7 @@ export default function DomainPaymentDashboard() {
           </Button>
 
           {/* Trigger Auto-Pay Engine Button */}
-          {/* <Button
+          <Button
             onClick={handleRunAutoPayNow}
             disabled={isRunningAutoPay}
             variant="outline"
@@ -686,7 +711,7 @@ export default function DomainPaymentDashboard() {
           >
             <Zap className={`h-4 w-4 text-emerald-600 ${isRunningAutoPay ? "animate-spin" : ""}`} />
             <span className="truncate">{isRunningAutoPay ? "Auto-Paying..." : "Run Auto-Pay"}</span>
-          </Button> */}
+          </Button>
 
           {selectedDomainIds.length > 0 && (
             <Button
@@ -849,39 +874,57 @@ export default function DomainPaymentDashboard() {
                   </p>
                 </div>
               ) : (
-                savedCards.map((card) => (
-                  <div
-                    key={card.id}
-                    className={`p-3 sm:p-3.5 rounded-xl border flex flex-col xs:flex-row xs:items-center justify-between gap-2.5 transition-all ${card.isPrimary
-                        ? "border-emerald-300 bg-emerald-50/40 shadow-2xs"
-                        : "border-slate-200 bg-slate-50/50"
-                      }`}
-                  >
-                    <div className="flex items-center space-x-3">
-                      <div
-                        className={`p-2.5 rounded-lg shrink-0 ${card.isPrimary
-                            ? "bg-emerald-600 text-white"
-                            : "bg-slate-200 text-slate-700"
-                          }`}
-                      >
-                        <CreditCard className="h-4 w-4" />
-                      </div>
-                      <div>
-                        <div className="text-xs font-bold text-slate-900 flex flex-wrap items-center gap-1.5">
-                          <span>
-                            {card.brand.toUpperCase()} ending in {card.last4}
-                          </span>
-                          {card.isPrimary && (
-                            <Badge className="bg-emerald-600 text-white text-[9px] px-1.5 py-0 font-bold shrink-0">
-                              Primary Auto-Pay
-                            </Badge>
-                          )}
+                savedCards.map((card) => {
+                  const expired = isCardExpired(card.expMonth, card.expYear);
+                  const expiringSoon = isCardExpiringSoon(card.expMonth, card.expYear);
+
+                  return (
+                    <div
+                      key={card.id}
+                      className={`p-3 sm:p-3.5 rounded-xl border flex flex-col xs:flex-row xs:items-center justify-between gap-2.5 transition-all ${expired
+                          ? "border-red-200 bg-red-50/40"
+                          : card.isPrimary
+                            ? "border-emerald-300 bg-emerald-50/40 shadow-2xs"
+                            : "border-slate-200 bg-slate-50/50"
+                        }`}
+                    >
+                      <div className="flex items-center space-x-3">
+                        <div
+                          className={`p-2.5 rounded-lg shrink-0 ${expired
+                              ? "bg-red-500 text-white"
+                              : card.isPrimary
+                                ? "bg-emerald-600 text-white"
+                                : "bg-slate-200 text-slate-700"
+                            }`}
+                        >
+                          <CreditCard className="h-4 w-4" />
                         </div>
-                        <div className="text-[10px] text-slate-500">
-                          Expires {String(card.expMonth).padStart(2, "0")}/{card.expYear} • {card.holderName}
+                        <div>
+                          <div className="text-xs font-bold text-slate-900 flex flex-wrap items-center gap-1.5">
+                            <span>
+                              {card.brand.toUpperCase()} ending in {card.last4}
+                            </span>
+                            {card.isPrimary && (
+                              <Badge className="bg-emerald-600 text-white text-[9px] px-1.5 py-0 font-bold shrink-0">
+                                Primary Auto-Pay
+                              </Badge>
+                            )}
+                            {expired && (
+                              <Badge className="bg-red-600 text-white text-[9px] px-1.5 py-0 font-bold shrink-0">
+                                Expired
+                              </Badge>
+                            )}
+                            {!expired && expiringSoon && (
+                              <Badge className="bg-amber-500 text-white text-[9px] px-1.5 py-0 font-bold shrink-0">
+                                Expiring Soon
+                              </Badge>
+                            )}
+                          </div>
+                          <div className="text-[10px] text-slate-500">
+                            Expires {String(card.expMonth).padStart(2, "0")}/{card.expYear} • {card.holderName}
+                          </div>
                         </div>
                       </div>
-                    </div>
 
                   <div className="flex items-center space-x-1.5 self-end xs:self-auto">
                     {!card.isPrimary ? (
@@ -904,14 +947,14 @@ export default function DomainPaymentDashboard() {
                           ? "text-slate-300 cursor-not-allowed"
                           : "text-red-500 hover:bg-red-50 hover:text-red-700"
                         }`}
-                      title={card.isPrimary ? "Cannot delete primary card" : "Remove Card"}
                     >
                       <Trash2 className="h-4 w-4" />
                     </button>
                   </div>
                 </div>
-              ))
-              )}
+              );
+            })
+          )}
             </div>
 
             {/* Add New Card Section */}

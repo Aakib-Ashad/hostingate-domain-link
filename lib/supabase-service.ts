@@ -25,6 +25,10 @@ export async function recordStripePayment(params: {
   couponCode?: string | null;
   discountCents?: number;
   autoPayEnabled?: boolean;
+  renewalPrice?: number;
+  sslPrice?: number;
+  domainProtectionEnabled?: boolean;
+  domainProtectionPrice?: number;
 }) {
   try {
     const paidAt = new Date().toISOString();
@@ -86,18 +90,22 @@ export async function recordStripePayment(params: {
         domain_name: params.domainName,
         period_years: params.periodYears,
         user_email: params.userEmail,
+        renewal_price: params.renewalPrice,
+        ssl_price: params.sslPrice,
+        domain_protection_enabled: params.domainProtectionEnabled,
+        domain_protection_price: params.domainProtectionPrice,
       },
     };
 
     const { data: paymentRecord, error: paymentErr } = await supabase
       .schema("domain")
       .from("stripe_payments")
-      .insert(paymentPayload as any)
+      .upsert(paymentPayload as any, { onConflict: "payment_intent_id, domain_id" })
       .select("*")
       .single();
 
     if (paymentErr) {
-      console.warn("Supabase domain.stripe_payments insert warning:", paymentErr.message);
+      console.warn("Supabase domain.stripe_payments upsert warning:", paymentErr.message);
     }
 
     // 3. Upsert domain subscription with next_payment_date, status = 'already_paid', auto_pay_enabled, and auto_pay_method_id
@@ -113,6 +121,11 @@ export async function recordStripePayment(params: {
       auto_pay_method: cardLast4 ? `•••• ${cardLast4}` : undefined,
       auto_pay_method_id: autoPayMethodUuid,
     };
+
+    if (params.renewalPrice !== undefined) subscriptionPayload.renewal_price = params.renewalPrice;
+    if (params.sslPrice !== undefined) subscriptionPayload.ssl_price = params.sslPrice;
+    if (params.domainProtectionEnabled !== undefined) subscriptionPayload.domain_protection_enabled = params.domainProtectionEnabled;
+    if (params.domainProtectionPrice !== undefined) subscriptionPayload.domain_protection_price = params.domainProtectionPrice;
 
     const { data: subRecord, error: subErr } = await supabase
       .schema("domain")
