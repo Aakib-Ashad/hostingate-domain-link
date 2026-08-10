@@ -126,11 +126,9 @@ export default function DomainPaymentDashboard() {
   // Card Manager Dialog State
   const [isCardManagerOpen, setIsCardManagerOpen] = useState(false);
   const [isAddingInManager, setIsAddingInManager] = useState(false);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [isRunningAutoPay, setIsRunningAutoPay] = useState(false);
 
   // Trigger Auto-Pay Renewal Engine via Stripe Off-Session Charges
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleRunAutoPayNow = async () => {
     if (!primaryCard) {
       toast.error("Primary Card Required", {
