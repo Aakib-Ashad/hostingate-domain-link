@@ -1,14 +1,34 @@
 // app/api/payment/route.ts
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
+import { createClient } from "@supabase/supabase-js";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: "2025-08-27.basil",
 });
 
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+  { db: { schema: "domain" } }
+);
+
 export async function POST(req: Request) {
   try {
-    const { amount, coupon, email } = await req.json();
+    const {
+      amount,
+      coupon,
+      email,
+      domainId,
+      domainName,
+      periodYears,
+      paymentMethodId,
+      autoPayEnabled,
+      items, // optional array of domains for bulk payment
+    } = await req.json();
+
+    const userEmail = email || "domain@hostingate.com";
+
     const amountInCents = Math.round(amount * 100);
     if (!Number.isFinite(amountInCents) || amountInCents <= 0) {
       return NextResponse.json({ error: "Invalid amount" }, { status: 400 });
@@ -37,54 +57,260 @@ export async function POST(req: Request) {
       }
     }
 
-    let customerId: string | undefined;
-    if (email) {
-      const customers = await stripe.customers.list({
-        email: email,
-        limit: 1,
+    // 1. Get or create Stripe Customer
+    let customerId: string;
+    const customers = await stripe.customers.list({
+      email: userEmail,
+      limit: 1,
+    });
+
+    if (customers.data.length > 0) {
+      customerId = customers.data[0].id;
+    } else {
+      const customer = await stripe.customers.create({
+        email: userEmail,
+        name: "Hostingate Customer",
+        metadata: {
+          source: "hostingate-domain-portal",
+        },
       });
-      if (customers.data.length > 0) {
-        customerId = customers.data[0].id;
+      customerId = customer.id;
+    }
+
+    // Persist customer in domain.customers
+    await supabase.from("customers").upsert(
+      { user_email: userEmail, stripe_customer_id: customerId } as any,
+      { onConflict: "user_email" }
+    );
+
+    // 2. Resolve Payment Method ID in Stripe
+    let targetPmId = paymentMethodId;
+
+    if (!targetPmId || !targetPmId.startsWith("pm_")) {
+      // Find existing primary payment method for customer in Supabase or Stripe
+      const { data: primaryPm } = await supabase
+        .from("payment_methods")
+        .select("stripe_payment_method_id")
+        .eq("user_email", userEmail)
+        .eq("is_primary", true)
+        .maybeSingle();
+
+      if (primaryPm?.stripe_payment_method_id) {
+        targetPmId = primaryPm.stripe_payment_method_id;
       } else {
-        const customer = await stripe.customers.create({
-          email: email,
-          metadata: {
-            source: "hostingate-mailportal",
-          },
+        // Create test card payment method attached to customer for sandbox testing
+        const pm = await stripe.paymentMethods.create({
+          type: "card",
+          card: { token: "tok_visa" },
+          billing_details: { email: userEmail, name: "Hostingate Customer" },
         });
-        customerId = customer.id;
+        targetPmId = pm.id;
       }
     }
 
-    const paymentIntent = await stripe.paymentIntents.create({
+    // Retrieve card details & owner customer from Stripe API
+    let brand = "visa";
+    let last4 = "4242";
+    let expMonth = 12;
+    let expYear = 2028;
+
+    try {
+      const pmDetails = await stripe.paymentMethods.retrieve(targetPmId);
+      if (typeof pmDetails.customer === "string" && pmDetails.customer) {
+        customerId = pmDetails.customer;
+      } else {
+        // Unattached payment method: attach to customer
+        try {
+          await stripe.paymentMethods.attach(targetPmId, { customer: customerId });
+        } catch (attachErr: any) {
+          if (!attachErr.message?.includes("already attached")) {
+            console.warn("Payment method attach notice:", attachErr.message);
+          }
+        }
+      }
+
+      if (pmDetails.card) {
+        brand = pmDetails.card.brand || "visa";
+        last4 = pmDetails.card.last4 || "4242";
+        expMonth = pmDetails.card.exp_month || 12;
+        expYear = pmDetails.card.exp_year || 2028;
+      }
+    } catch (e) {
+      console.warn("Retrieve PM details warning:", e);
+    }
+
+    // 3. Upsert into domain.payment_methods & get Supabase UUID `id`
+    const cardPayload = {
+      user_email: userEmail,
+      stripe_customer_id: customerId,
+      stripe_payment_method_id: targetPmId,
+      brand,
+      last4,
+      exp_month: expMonth,
+      exp_year: expYear,
+      holder_name: "Hostingate Customer",
+      is_primary: true,
+    };
+
+    const { data: dbCardRecord } = await supabase
+      .from("payment_methods")
+      .upsert(cardPayload as any, { onConflict: "stripe_payment_method_id" })
+      .select("id")
+      .single();
+
+    const pmUuid = dbCardRecord?.id || null;
+
+    // 4. Build domain items list
+    const domainListToProcess: Array<{
+      id: string;
+      name: string;
+      years: number;
+      amountUsd: number;
+      renewalPrice?: number;
+      sslPrice?: number;
+      domainProtectionEnabled?: boolean;
+      domainProtectionPrice?: number;
+    }> = Array.isArray(items) && items.length > 0
+      ? items.map((i: any) => ({
+          id: i.domainId || i.id,
+          name: i.domainName || i.fullDomainName,
+          years: i.periodYears || periodYears || 1,
+          amountUsd: i.amountUsd || i.renewalPrice || finalCents / 100 / items.length,
+          renewalPrice: i.renewalPrice,
+          sslPrice: i.sslPrice,
+          domainProtectionEnabled: i.domainProtectionEnabled,
+          domainProtectionPrice: i.domainProtectionPrice,
+        }))
+      : [
+          {
+            id: domainId || "dom-1",
+            name: domainName || "sckali.com",
+            years: periodYears || 1,
+            amountUsd: finalCents / 100,
+          },
+        ];
+
+    const isAutoPay = autoPayEnabled ?? true;
+
+    // 6. Create Stripe PaymentIntent with detailed metadata (webhook handles DB persistence asynchronously)
+    const paymentIntentOptions: Stripe.PaymentIntentCreateParams = {
       amount: finalCents,
       currency: "usd",
       customer: customerId,
+      payment_method: targetPmId,
+      confirm: true,
+      off_session: true,
       setup_future_usage: "off_session",
-      automatic_payment_methods: {
-        enabled: true,
-        allow_redirects: "never",
-      },
       metadata: {
-        product_type: "scale_your_project",
+        domain_id: domainId || domainListToProcess[0]?.id || "domain-payment",
+        domain_name: domainName || domainListToProcess[0]?.name || "domain-renewal",
+        period_years: String(periodYears || 1),
+        user_email: userEmail,
+        auto_pay: String(isAutoPay),
+        items_json: JSON.stringify(domainListToProcess),
       },
-      description: `Scale your project`,
-      statement_descriptor_suffix: "Scale Project", // max 22 chars
-    });
+      description: `Domain Payment: ${domainName || "Renewal"}`,
+    };
+
+    const paymentIntent = await stripe.paymentIntents.create(paymentIntentOptions);
+
+    // 7. Synchronously persist transaction and update domain subscriptions in DB if payment succeeded
+    if (paymentIntent.status === "succeeded") {
+      const paidAt = new Date().toISOString();
+      for (const item of domainListToProcess) {
+        const itemYears = item.years || 1;
+        const nextDateObj = new Date();
+        nextDateObj.setFullYear(nextDateObj.getFullYear() + itemYears);
+        const nextPaymentDate = nextDateObj.toISOString().split("T")[0];
+
+        try {
+          const { error: stripeErr } = await supabase.from("stripe_payments").upsert(
+            {
+              payment_intent_id: paymentIntent.id,
+              stripe_customer_id: customerId,
+              user_email: userEmail,
+              domain_id: item.id,
+              domain_name: item.name,
+              amount_cents: Math.round(item.amountUsd * 100),
+              amount_usd: item.amountUsd,
+              currency: paymentIntent.currency || "usd",
+              period_years: itemYears,
+              payment_method_id: targetPmId,
+              card_brand: brand,
+              card_last4: last4,
+              status: "succeeded",
+              is_auto_pay: isAutoPay,
+              paid_at: paidAt,
+              next_payment_date: nextPaymentDate,
+              metadata: {
+                domain_id: item.id,
+                domain_name: item.name,
+                period_years: itemYears,
+                user_email: userEmail,
+                renewal_price: item.renewalPrice,
+                ssl_price: item.sslPrice,
+                domain_protection_enabled: item.domainProtectionEnabled,
+                domain_protection_price: item.domainProtectionPrice,
+              },
+            } as any,
+            { onConflict: "payment_intent_id, domain_id" }
+          );
+
+          if (stripeErr) {
+            console.warn("Supabase stripe_payments upsert error in api/payment:", stripeErr.message);
+          }
+
+          const subPayload: any = {
+            domain_id: item.id,
+            full_domain_name: item.name,
+            user_email: userEmail,
+            status: "already_paid",
+            period_years: itemYears,
+            auto_pay_enabled: isAutoPay,
+            auto_pay_method: `•••• ${last4}`,
+            auto_pay_method_id: pmUuid,
+            last_payment_date: paidAt.split("T")[0],
+            next_payment_date: nextPaymentDate,
+          };
+
+          if (item.renewalPrice !== undefined) subPayload.renewal_price = item.renewalPrice;
+          if (item.sslPrice !== undefined) subPayload.ssl_price = item.sslPrice;
+          if (item.domainProtectionEnabled !== undefined) subPayload.domain_protection_enabled = item.domainProtectionEnabled;
+          if (item.domainProtectionPrice !== undefined) subPayload.domain_protection_price = item.domainProtectionPrice;
+
+          const { error: subErr } = await supabase.from("domain_subscriptions").upsert(
+            subPayload,
+            { onConflict: "full_domain_name" }
+          );
+
+          if (subErr) {
+            console.warn("Supabase domain_subscriptions upsert error in api/payment:", subErr.message);
+          }
+        } catch (dbErr) {
+          console.error("DB persistence error in api/payment route:", dbErr);
+        }
+      }
+    }
 
     return NextResponse.json({
+      success: true,
       clientSecret: paymentIntent.client_secret,
       paymentIntentId: paymentIntent.id,
-      customerId: customerId || null,
+      paymentMethodId: targetPmId,
+      autoPayMethodId: pmUuid,
+      customerId: customerId,
+      status: paymentIntent.status,
       finalAmountCents: finalCents,
     });
   } catch (error) {
     if (error instanceof Error) {
-      console.error("PaymentIntent error:", error);
+      console.error("PaymentIntent execution error:", error);
       return NextResponse.json(
-        { error: error.message || "Failed to create payment" },
+        { error: error.message || "Failed to execute payment" },
         { status: 500 }
       );
     }
+    return NextResponse.json({ error: "Payment failed" }, { status: 500 });
   }
 }
+

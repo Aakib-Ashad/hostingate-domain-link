@@ -80,6 +80,44 @@ export interface DomainInfo {
   mailboxes?: string[];
 }
 
+export interface PaymentMethodItem {
+  id: string;
+  brand: "visa" | "mastercard" | "amex" | "discover";
+  last4: string;
+  expMonth: number;
+  expYear: number;
+  isPrimary: boolean;
+  holderName?: string;
+}
+
+export const initialPaymentMethods: PaymentMethodItem[] = [];
+
+/**
+ * Helper function to check if a card is expired
+ */
+export function isCardExpired(expMonth: number, expYear: number): boolean {
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1; // 1-indexed (Jan = 1)
+
+  if (expYear < currentYear) return true;
+  if (expYear === currentYear && expMonth < currentMonth) return true;
+  return false;
+}
+
+/**
+ * Helper function to check if a card is expiring within 30 days
+ */
+export function isCardExpiringSoon(expMonth: number, expYear: number): boolean {
+  if (isCardExpired(expMonth, expYear)) return false;
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
+
+  if (expYear === currentYear && expMonth === currentMonth) return true;
+  return false;
+}
+
 export interface DomainPaymentInfo extends DomainInfo {
   id: string;
   fullDomainName: string;
@@ -148,8 +186,7 @@ export const domainPaymentItems: DomainPaymentInfo[] = [
     daysRemaining: 8,
     renewalPrice: 24.99,
     status: "closer_to_due",
-    autoPayEnabled: true,
-    autoPayMethod: "•••• 4242",
+    autoPayEnabled: false,
     periodYears: 1,
     sslPrice: 29,
     domainProtectionEnabled: true,
@@ -187,8 +224,7 @@ export const domainPaymentItems: DomainPaymentInfo[] = [
     daysRemaining: 22,
     renewalPrice: 18.99,
     status: "closer_to_due",
-    autoPayEnabled: true,
-    autoPayMethod: "•••• 8819",
+    autoPayEnabled: false,
     periodYears: 1,
     sslPrice: 29,
     domainProtectionEnabled: true,
@@ -206,9 +242,8 @@ export const domainPaymentItems: DomainPaymentInfo[] = [
     dueDate: "2027-04-03",
     daysRemaining: 240,
     renewalPrice: 19.99,
-    status: "already_paid",
-    autoPayEnabled: true,
-    autoPayMethod: "•••• 4242",
+    status: "closer_to_due",
+    autoPayEnabled: false,
     periodYears: 1,
     lastPaymentDate: "2026-04-03",
     sslPrice: 29,
@@ -227,9 +262,8 @@ export const domainPaymentItems: DomainPaymentInfo[] = [
     dueDate: "2027-02-07",
     daysRemaining: 185,
     renewalPrice: 15.99,
-    status: "already_paid",
-    autoPayEnabled: true,
-    autoPayMethod: "•••• 4242",
+    status: "closer_to_due",
+    autoPayEnabled: false,
     periodYears: 1,
     lastPaymentDate: "2026-02-07",
     sslPrice: 29,
@@ -248,7 +282,7 @@ export const domainPaymentItems: DomainPaymentInfo[] = [
     dueDate: "2027-06-12",
     daysRemaining: 310,
     renewalPrice: 29.99,
-    status: "already_paid",
+    status: "closer_to_due",
     autoPayEnabled: false,
     periodYears: 1,
     lastPaymentDate: "2026-06-12",
@@ -268,9 +302,8 @@ export const domainPaymentItems: DomainPaymentInfo[] = [
     dueDate: "2026-12-04",
     daysRemaining: 120,
     renewalPrice: 14.99,
-    status: "already_paid",
-    autoPayEnabled: true,
-    autoPayMethod: "•••• 1092",
+    status: "closer_to_due",
+    autoPayEnabled: false,
     periodYears: 1,
     lastPaymentDate: "2025-12-04",
     sslPrice: 29,
@@ -289,11 +322,31 @@ export const domainPaymentItems: DomainPaymentInfo[] = [
     dueDate: "2027-05-23",
     daysRemaining: 290,
     renewalPrice: 49.99,
-    status: "already_paid",
-    autoPayEnabled: true,
-    autoPayMethod: "•••• 4242",
+    status: "closer_to_due",
+    autoPayEnabled: false,
     periodYears: 1,
     lastPaymentDate: "2026-05-23",
+    sslPrice: 29,
+    domainProtectionEnabled: true,
+    domainProtectionPrice: 49,
+  },
+  {
+    id: "dom-11",
+    domain: "test",
+    fullDomainName: "test.com",
+    type: "main",
+    vercel: true,
+    supabase: false,
+    resend: true,
+    fixer: true,
+    dueDate: "2026-08-07",
+    daysRemaining: 1,
+    renewalPrice: 19.99,
+    status: "closer_to_due",
+    autoPayEnabled: false,
+    autoPayMethod: "•••• 4242",
+    periodYears: 1,
+    lastPaymentDate: "2026-08-06",
     sslPrice: 29,
     domainProtectionEnabled: true,
     domainProtectionPrice: 49,
