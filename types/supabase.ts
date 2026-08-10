@@ -14,21 +14,6 @@ export interface CustomerRow {
   updated_at?: string;
 }
 
-export interface PaymentMethodRow {
-  id: string;
-  user_email: string;
-  stripe_customer_id: string;
-  stripe_payment_method_id: string;
-  brand: string;
-  last4: string;
-  exp_month: number;
-  exp_year: number;
-  holder_name?: string | null;
-  is_primary: boolean;
-  created_at?: string;
-  updated_at?: string;
-}
-
 export interface DomainSubscriptionRow {
   id: string;
   domain_id: string;
@@ -39,10 +24,12 @@ export interface DomainSubscriptionRow {
   ssl_price: number;
   domain_protection_enabled: boolean;
   domain_protection_price: number;
+  toa_enabled?: boolean;
+  toa_price?: number;
   period_years: number;
   auto_pay_enabled: boolean;
   auto_pay_method?: string | null;
-  auto_pay_method_id?: string | null;
+  auto_pay_method_id?: string | null; // Stripe PaymentMethod ID string (e.g. 'pm_1U2m...')
   last_payment_date?: string | null;
   next_payment_date: string; // Renewal due date stored in Supabase
   days_remaining?: number;
@@ -83,13 +70,6 @@ export interface Database {
           id?: string;
         };
         Update: Partial<CustomerRow>;
-      };
-      payment_methods: {
-        Row: PaymentMethodRow;
-        Insert: Omit<PaymentMethodRow, "id" | "created_at" | "updated_at"> & {
-          id?: string;
-        };
-        Update: Partial<PaymentMethodRow>;
       };
       domain_subscriptions: {
         Row: DomainSubscriptionRow;

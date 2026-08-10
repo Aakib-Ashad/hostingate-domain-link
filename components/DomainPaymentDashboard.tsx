@@ -39,18 +39,22 @@ import { toast } from "sonner";
 import { motion } from "framer-motion";
 import {
   updateDomainAutoPayInDb,
+  updateDomainProtectionInDb,
+  updateDomainToaInDb,
   fetchUserPaymentMethods,
   savePaymentMethodToDb,
   setPrimaryPaymentMethodInDb,
   deletePaymentMethodFromDb,
   fetchDomainSubscriptions,
 } from "@/lib/supabase-service";
+import { loadStripe } from "@stripe/stripe-js";
+import { Elements } from "@stripe/react-stripe-js";
+import StripeCardForm from "./stripe-card-form";
 
-import { useAuth } from "@/components/providers/auth";
+const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || "");
 
 export default function DomainPaymentDashboard() {
-  const { email: authEmail } = useAuth();
-  const userEmail = authEmail || "domain@hostingate.com";
+  const userEmail = "domain@hostingate.com";
 
   const [domainsList, setDomainsList] = useState<DomainPaymentInfo[]>(domainPaymentItems);
   const [searchTerm, setSearchTerm] = useState("");
@@ -86,6 +90,12 @@ export default function DomainPaymentDashboard() {
                 autoPayEnabled: sub.auto_pay_enabled,
                 autoPayMethod: sub.auto_pay_method || undefined,
                 lastPaymentDate: sub.last_payment_date || item.lastPaymentDate,
+                domainProtectionEnabled: sub.domain_protection_enabled ?? item.domainProtectionEnabled,
+                domainProtectionPrice: sub.domain_protection_price ?? item.domainProtectionPrice,
+                toaEnabled: sub.toa_enabled ?? item.toaEnabled ?? true,
+                toaPrice: sub.toa_price ?? item.toaPrice ?? 500,
+                renewalPrice: sub.renewal_price ?? item.renewalPrice,
+                sslPrice: sub.ssl_price ?? item.sslPrice,
               };
             }
             return item;
@@ -117,8 +127,8 @@ export default function DomainPaymentDashboard() {
   const [newCardForm, setNewCardForm] = useState({
     number: "",
     holderName: "",
-    expMonth: "08",
-    expYear: "2028",
+    expMonth: "",
+    expYear: "",
     cvc: "",
     brand: "visa" as "visa" | "mastercard" | "amex" | "discover",
   });
@@ -163,7 +173,7 @@ export default function DomainPaymentDashboard() {
           });
 
           // Refresh domain list from Supabase
-          const dbSubs = await fetchDomainSubscriptions("domain@hostingate.com");
+          const dbSubs = await fetchDomainSubscriptions(userEmail);
           if (dbSubs && dbSubs.length > 0) {
             setDomainsList((prev) =>
               prev.map((item) => {
@@ -227,32 +237,83 @@ export default function DomainPaymentDashboard() {
     );
 
     // Persist primary card update in Supabase
-    await setPrimaryPaymentMethodInDb(cardId, "domain@hostingate.com");
+    await setPrimaryPaymentMethodInDb(cardId, userEmail);
 
     toast.success("Primary Card Updated!", {
-      description: `${targetCard.brand.toUpperCase()} ending in ${targetCard.last4} is now set as your primary card in Supabase for Auto-Pay renewals.`,
+      description: `${targetCard.brand.toUpperCase()} ending in ${targetCard.last4} is now set as your primary card for Auto-Pay renewals.`,
     });
   };
 
   // Add New Card Handler (Updates State & Saves to Supabase)
-  const handleAddNewCard = async (setAsPrimary: boolean): Promise<PaymentMethodItem> => {
+  const handleAddNewCard = async (setAsPrimary: boolean): Promise<PaymentMethodItem | null> => {
     const cleanNumber = newCardForm.number.replace(/\s+/g, "");
-    const last4 = cleanNumber.length >= 4 ? cleanNumber.slice(-4) : "9942";
+    if (!cleanNumber || cleanNumber.length < 13 || cleanNumber.length > 19) {
+      toast.error("Invalid Card Number", {
+        description: "Please enter a valid card number (13-19 digits).",
+      });
+      return null;
+    }
+
+    if (!newCardForm.holderName.trim()) {
+      toast.error("Missing Cardholder Name", {
+        description: "Please enter the cardholder name.",
+      });
+      return null;
+    }
+
+    let month = parseInt(newCardForm.expMonth, 10);
+    if (isNaN(month) || month < 1 || month > 12) {
+      toast.error("Invalid Expiration Month", {
+        description: "Please enter a valid month (01-12).",
+      });
+      return null;
+    }
+
+    let year = parseInt(newCardForm.expYear, 10);
+    if (isNaN(year)) {
+      toast.error("Invalid Expiration Year", {
+        description: "Please enter a valid expiration year (e.g. 2028 or 28).",
+      });
+      return null;
+    }
+
+    if (year < 100) {
+      year += 2000;
+    }
+
+    const currentYear = new Date().getFullYear();
+    const currentMonth = new Date().getMonth() + 1;
+
+    if (year < currentYear || (year === currentYear && month < currentMonth)) {
+      toast.error("Card Expired", {
+        description: "The expiration date entered is in the past.",
+      });
+      return null;
+    }
+
+    const last4 = cleanNumber.slice(-4);
     const brand =
-      newCardForm.brand || (cleanNumber.startsWith("5") ? "mastercard" : "visa");
+      newCardForm.brand ||
+      (cleanNumber.startsWith("34") || cleanNumber.startsWith("37")
+        ? "amex"
+        : cleanNumber.startsWith("5")
+        ? "mastercard"
+        : cleanNumber.startsWith("6")
+        ? "discover"
+        : "visa");
 
     const newCardTemp: PaymentMethodItem = {
       id: `pm-${Date.now()}`,
       brand,
       last4,
-      expMonth: parseInt(newCardForm.expMonth, 10) || 8,
-      expYear: parseInt(newCardForm.expYear, 10) || 2028,
+      expMonth: month,
+      expYear: year,
       isPrimary: setAsPrimary || savedCards.length === 0,
-      holderName: newCardForm.holderName || "Hostingate User",
+      holderName: newCardForm.holderName.trim(),
     };
 
     // Save Card directly into Supabase domain.payment_methods table
-    const savedDbCard = await savePaymentMethodToDb(newCardTemp, "domain@hostingate.com");
+    const savedDbCard = await savePaymentMethodToDb(newCardTemp, userEmail);
     const newCard = savedDbCard || newCardTemp;
 
     setSavedCards((prev) => {
@@ -278,15 +339,13 @@ export default function DomainPaymentDashboard() {
     setNewCardForm({
       number: "",
       holderName: "",
-      expMonth: "08",
-      expYear: "2028",
+      expMonth: "",
+      expYear: "",
       cvc: "",
       brand: "visa",
     });
 
-    toast.success("New Payment Card Added!", {
-      description: `${brand.toUpperCase()} ending in ${last4} was saved to Supabase.`,
-    });
+    toast.success("New Payment Card Added!");
 
     return newCard;
   };
@@ -313,18 +372,19 @@ export default function DomainPaymentDashboard() {
     setSavedCards((prev) => prev.filter((c) => c.id !== cardId));
 
     // Delete card from Supabase domain.payment_methods table
-    await deletePaymentMethodFromDb(cardId, "domain@hostingate.com");
+    await deletePaymentMethodFromDb(cardId, userEmail);
 
     toast.info("Payment Card Removed", {
-      description: `${cardToDelete.brand.toUpperCase()} ending in ${cardToDelete.last4} was deleted from Supabase.`,
+      description: `${cardToDelete.brand.toUpperCase()} ending in ${cardToDelete.last4} was deleted.`,
     });
   };
 
-  // Calculate total price for a single domain including addons (SSL mandatory $29, Protection optional $49)
+  // Calculate total price for a single domain including addons (SSL mandatory $29, Protection optional $49, TOA optional $500)
   const getDomainItemTotal = (item: DomainPaymentInfo) => {
     const ssl = item.sslPrice || 29;
     const protection = item.domainProtectionEnabled ? item.domainProtectionPrice || 49 : 0;
-    return (item.renewalPrice + ssl + protection) * item.periodYears;
+    const toa = (item.toaEnabled ?? true) ? item.toaPrice || 500 : 0;
+    return (item.renewalPrice + ssl + protection + toa) * item.periodYears;
   };
 
   // Grouped domains
@@ -359,7 +419,7 @@ export default function DomainPaymentDashboard() {
     setSelectedDomainIds(allDueIds);
     setCheckoutTarget("bulk");
     setAutoPayOnCheckout(true);
-    setIsAddingNewCardInCheckout(false);
+    setIsAddingNewCardInCheckout(savedCards.length === 0);
     setIsCheckoutOpen(true);
   };
 
@@ -425,7 +485,7 @@ export default function DomainPaymentDashboard() {
   };
 
   // Toggle Domain Protection ($49 optional) per domain
-  const toggleDomainProtection = (id: string, domainName: string) => {
+  const toggleDomainProtection = async (id: string, domainName: string) => {
     const targetDomain = domainsList.find((d) => d.id === id);
     if (!targetDomain) return;
 
@@ -447,6 +507,45 @@ export default function DomainPaymentDashboard() {
           : "Domain protection disabled.",
       }
     );
+
+    // Sync state directly into Supabase domain_subscriptions
+    await updateDomainProtectionInDb({
+      domainId: id,
+      fullDomainName: domainName,
+      domainProtectionEnabled: nextState,
+    });
+  };
+
+  // Toggle TOA (Total Ownership Assurance $500 optional) per domain
+  const toggleDomainToa = async (id: string, domainName: string) => {
+    const targetDomain = domainsList.find((d) => d.id === id);
+    if (!targetDomain) return;
+
+    const nextState = !(targetDomain.toaEnabled ?? true);
+
+    setDomainsList((prev) =>
+      prev.map((item) =>
+        item.id === id ? { ...item, toaEnabled: nextState } : item
+      )
+    );
+
+    toast.info(
+      nextState
+        ? `TOA (Total Ownership Assurance) Enabled for ${domainName} (+$500/yr)`
+        : `TOA (Total Ownership Assurance) Removed for ${domainName}`,
+      {
+        description: nextState
+          ? "Total ownership assurance activated."
+          : "Standard protection without total ownership assurance.",
+      }
+    );
+
+    // Sync state directly into Supabase domain_subscriptions
+    await updateDomainToaInDb({
+      domainId: id,
+      fullDomainName: domainName,
+      toaEnabled: nextState,
+    });
   };
 
   // Update Year Duration (1 Yr, 2 Yrs, 3 Yrs)
@@ -461,7 +560,7 @@ export default function DomainPaymentDashboard() {
     setSingleCheckoutDomain(domain);
     setCheckoutTarget("single");
     setAutoPayOnCheckout(true);
-    setIsAddingNewCardInCheckout(false);
+    setIsAddingNewCardInCheckout(savedCards.length === 0);
     setIsCheckoutOpen(true);
   };
 
@@ -473,7 +572,7 @@ export default function DomainPaymentDashboard() {
     }
     setCheckoutTarget("bulk");
     setAutoPayOnCheckout(true);
-    setIsAddingNewCardInCheckout(false);
+    setIsAddingNewCardInCheckout(savedCards.length === 0);
     setIsCheckoutOpen(true);
   };
 
@@ -492,15 +591,9 @@ export default function DomainPaymentDashboard() {
   const processCheckoutPayment = async () => {
     setIsProcessingPayment(true);
 
-    let activeCard: PaymentMethodItem | undefined;
-
-    if (isAddingNewCardInCheckout) {
-      activeCard = await handleAddNewCard(setNewCardAsPrimary);
-    } else {
-      activeCard = savedCards.find((c) => c.id === selectedPaymentMethodId) || primaryCard;
-      if (setNewCardAsPrimary && activeCard && !activeCard.isPrimary) {
-        await handleSetPrimaryCard(activeCard.id);
-      }
+    const activeCard = savedCards.find((c) => c.id === selectedPaymentMethodId) || primaryCard;
+    if (setNewCardAsPrimary && activeCard && !activeCard.isPrimary) {
+      await handleSetPrimaryCard(activeCard.id);
     }
 
     const cardSuffix = activeCard ? `•••• ${activeCard.last4}` : "•••• 4242";
@@ -516,6 +609,8 @@ export default function DomainPaymentDashboard() {
         sslPrice: item.sslPrice,
         domainProtectionEnabled: item.domainProtectionEnabled,
         domainProtectionPrice: item.domainProtectionPrice,
+        toaEnabled: item.toaEnabled ?? true,
+        toaPrice: item.toaPrice || 500,
       }));
 
       const paymentRes = await fetch("/api/payment", {
@@ -531,6 +626,8 @@ export default function DomainPaymentDashboard() {
           sslPrice: checkoutItems[0]?.sslPrice,
           domainProtectionEnabled: checkoutItems[0]?.domainProtectionEnabled,
           domainProtectionPrice: checkoutItems[0]?.domainProtectionPrice,
+          toaEnabled: checkoutItems[0]?.toaEnabled ?? true,
+          toaPrice: checkoutItems[0]?.toaPrice || 500,
           paymentMethodId: activeCard?.id,
           autoPayEnabled: autoPayOnCheckout,
           items: itemsPayload,
@@ -544,7 +641,7 @@ export default function DomainPaymentDashboard() {
       }
 
       // Re-fetch updated domain subscriptions from Supabase to sync UI state
-      const dbSubs = await fetchDomainSubscriptions("domain@hostingate.com");
+      const dbSubs = await fetchDomainSubscriptions(userEmail);
       if (dbSubs && dbSubs.length > 0) {
         setDomainsList((prev) =>
           prev.map((item) => {
@@ -564,6 +661,12 @@ export default function DomainPaymentDashboard() {
                 autoPayEnabled: sub.auto_pay_enabled,
                 autoPayMethod: sub.auto_pay_method || undefined,
                 lastPaymentDate: sub.last_payment_date || item.lastPaymentDate,
+                domainProtectionEnabled: sub.domain_protection_enabled ?? item.domainProtectionEnabled,
+                domainProtectionPrice: sub.domain_protection_price ?? item.domainProtectionPrice,
+                toaEnabled: sub.toa_enabled ?? item.toaEnabled ?? true,
+                toaPrice: sub.toa_price ?? item.toaPrice ?? 500,
+                renewalPrice: sub.renewal_price ?? item.renewalPrice,
+                sslPrice: sub.ssl_price ?? item.sslPrice,
               };
             }
             return item;
@@ -596,7 +699,7 @@ export default function DomainPaymentDashboard() {
       const paidIds = checkoutItems.map((d) => d.id);
       setSelectedDomainIds((prev) => prev.filter((id) => !paidIds.includes(id)));
 
-      toast.success("Payment Processed & Saved to Supabase!", {
+      toast.success("Payment Processed", {
         description: `Renewed ${checkoutItems.length} domain(s) using ${cardBrand} ending in ${activeCard?.last4 || "4242"}. Total Paid: $${checkoutTotalAmount.toFixed(
           2
         )}`,
@@ -699,7 +802,7 @@ export default function DomainPaymentDashboard() {
           </Button>
 
           {/* Trigger Auto-Pay Engine Button */}
-          <Button
+          {/* <Button
             onClick={handleRunAutoPayNow}
             disabled={isRunningAutoPay}
             variant="outline"
@@ -709,7 +812,7 @@ export default function DomainPaymentDashboard() {
           >
             <Zap className={`h-4 w-4 text-emerald-600 ${isRunningAutoPay ? "animate-spin" : ""}`} />
             <span className="truncate">{isRunningAutoPay ? "Auto-Paying..." : "Run Auto-Pay"}</span>
-          </Button>
+          </Button> */}
 
           {selectedDomainIds.length > 0 && (
             <Button
@@ -753,6 +856,7 @@ export default function DomainPaymentDashboard() {
                   onToggleSelect={() => toggleSelectDomain(domain.id)}
                   onToggleAutoPay={() => toggleAutoPay(domain.id, domain.fullDomainName)}
                   onToggleProtection={() => toggleDomainProtection(domain.id, domain.fullDomainName)}
+                  onToggleToa={() => toggleDomainToa(domain.id, domain.fullDomainName)}
                   onUpdatePeriod={(years) => updatePeriodYears(domain.id, years)}
                   onPayNow={() => openSinglePayment(domain)}
                   getDomainTotal={getDomainItemTotal}
@@ -780,6 +884,7 @@ export default function DomainPaymentDashboard() {
                   onToggleSelect={() => toggleSelectDomain(domain.id)}
                   onToggleAutoPay={() => toggleAutoPay(domain.id, domain.fullDomainName)}
                   onToggleProtection={() => toggleDomainProtection(domain.id, domain.fullDomainName)}
+                  onToggleToa={() => toggleDomainToa(domain.id, domain.fullDomainName)}
                   onUpdatePeriod={(years) => updatePeriodYears(domain.id, years)}
                   onPayNow={() => openSinglePayment(domain)}
                   getDomainTotal={getDomainItemTotal}
@@ -807,6 +912,7 @@ export default function DomainPaymentDashboard() {
                   onToggleSelect={() => toggleSelectDomain(domain.id)}
                   onToggleAutoPay={() => toggleAutoPay(domain.id, domain.fullDomainName)}
                   onToggleProtection={() => toggleDomainProtection(domain.id, domain.fullDomainName)}
+                  onToggleToa={() => toggleDomainToa(domain.id, domain.fullDomainName)}
                   onUpdatePeriod={(years) => updatePeriodYears(domain.id, years)}
                   onPayNow={() => openSinglePayment(domain)}
                   getDomainTotal={getDomainItemTotal}
@@ -967,95 +1073,24 @@ export default function DomainPaymentDashboard() {
                   <Plus className="h-4 w-4" /> Add New Payment Card
                 </Button>
               ) : (
-                <div className="p-3.5 sm:p-4 border border-purple-200 bg-purple-50/50 rounded-xl space-y-3">
-                  <div className="flex items-center justify-between text-xs font-bold text-slate-900">
-                    <span>Add New Card</span>
-                    <button
-                      type="button"
-                      onClick={() => setIsAddingInManager(false)}
-                      className="text-[10px] text-slate-500 hover:text-slate-800"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Input
-                      placeholder="Cardholder Name"
-                      value={newCardForm.holderName}
-                      onChange={(e) =>
-                        setNewCardForm({ ...newCardForm, holderName: e.target.value })
-                      }
-                      className="h-9 text-xs bg-white border-slate-200 rounded-lg"
-                    />
-                    <Input
-                      placeholder="Card Number (4242 4242 4242 4242)"
-                      value={newCardForm.number}
-                      onChange={(e) =>
-                        setNewCardForm({ ...newCardForm, number: e.target.value })
-                      }
-                      maxLength={19}
-                      className="h-9 text-xs bg-white border-slate-200 rounded-lg font-mono"
-                    />
-                    <div className="grid grid-cols-3 gap-2">
-                      <Input
-                        placeholder="MM"
-                        value={newCardForm.expMonth}
-                        onChange={(e) =>
-                          setNewCardForm({ ...newCardForm, expMonth: e.target.value })
+                <Elements stripe={stripePromise}>
+                  <StripeCardForm
+                    userEmail={userEmail}
+                    setAsPrimary={setNewCardAsPrimary}
+                    setSetAsPrimary={setSetNewCardAsPrimary}
+                    onSuccess={(newCard) => {
+                      setSavedCards((prev) => {
+                        if (setNewCardAsPrimary) {
+                          return [...prev.map((c) => ({ ...c, isPrimary: false })), newCard];
                         }
-                        maxLength={2}
-                        className="h-9 text-xs bg-white border-slate-200 font-mono text-center"
-                      />
-                      <Input
-                        placeholder="YY"
-                        value={newCardForm.expYear}
-                        onChange={(e) =>
-                          setNewCardForm({ ...newCardForm, expYear: e.target.value })
-                        }
-                        maxLength={4}
-                        className="h-9 text-xs bg-white border-slate-200 font-mono text-center"
-                      />
-                      <Input
-                        placeholder="CVC"
-                        type="password"
-                        value={newCardForm.cvc}
-                        onChange={(e) =>
-                          setNewCardForm({ ...newCardForm, cvc: e.target.value })
-                        }
-                        maxLength={4}
-                        className="h-9 text-xs bg-white border-slate-200 font-mono text-center"
-                      />
-                    </div>
-
-                    <div className="flex items-center space-x-2 pt-1">
-                      <input
-                        type="checkbox"
-                        id="managerSetPrimary"
-                        checked={setNewCardAsPrimary}
-                        onChange={(e) => setSetNewCardAsPrimary(e.target.checked)}
-                        className="rounded border-slate-300 text-purple-600 focus:ring-purple-500 h-3.5 w-3.5"
-                      />
-                      <label
-                        htmlFor="managerSetPrimary"
-                        className="text-[11px] font-semibold text-slate-700 cursor-pointer"
-                      >
-                        Set as Primary Card for Auto-Pay
-                      </label>
-                    </div>
-
-                    <Button
-                      type="button"
-                      onClick={() => {
-                        handleAddNewCard(setNewCardAsPrimary);
-                        setIsAddingInManager(false);
-                      }}
-                      className="w-full h-9 bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs rounded-lg mt-2"
-                    >
-                      Save New Card
-                    </Button>
-                  </div>
-                </div>
+                        return [...prev, newCard];
+                      });
+                      setIsAddingInManager(false);
+                    }}
+                    onCancel={() => setIsAddingInManager(false)}
+                    submitButtonText="Save New Payment Card"
+                  />
+                </Elements>
               )}
             </div>
           </div>
@@ -1131,6 +1166,16 @@ export default function DomainPaymentDashboard() {
                             </span>
                           </div>
                         )}
+                        {(item.toaEnabled ?? true) && (
+                          <div className="flex justify-between text-purple-700 font-medium">
+                            <span className="flex items-center gap-1">
+                              <ShieldCheck className="h-3 w-3 text-purple-600" /> TOA (Total Ownership Assurance)
+                            </span>
+                            <span>
+                              ${((item.toaPrice || 500) * item.periodYears).toFixed(2)}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -1169,22 +1214,24 @@ export default function DomainPaymentDashboard() {
                 <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
                   Payment Method
                 </label>
-                <button
-                  type="button"
-                  onClick={() => setIsAddingNewCardInCheckout(!isAddingNewCardInCheckout)}
-                  className="text-xs font-bold text-purple-600 hover:text-purple-800 flex items-center gap-1"
-                >
-                  {isAddingNewCardInCheckout ? (
-                    "← Use Saved Card"
-                  ) : (
-                    <>
-                      <Plus className="h-3.5 w-3.5" /> Add New Card
-                    </>
-                  )}
-                </button>
+                {savedCards.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setIsAddingNewCardInCheckout(!isAddingNewCardInCheckout)}
+                    className="text-xs font-bold text-purple-600 hover:text-purple-800 flex items-center gap-1"
+                  >
+                    {isAddingNewCardInCheckout ? (
+                      "← Use Saved Card"
+                    ) : (
+                      <>
+                        <Plus className="h-3.5 w-3.5" /> Add New Card
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
 
-              {!isAddingNewCardInCheckout ? (
+              {!isAddingNewCardInCheckout && savedCards.length > 0 ? (
                 /* Saved Cards List Selector */
                 <div className="space-y-2">
                   {savedCards.map((card) => {
@@ -1251,88 +1298,24 @@ export default function DomainPaymentDashboard() {
                   })}
                 </div>
               ) : (
-                /* Add New Card Form Inline in Checkout */
-                <div className="p-4 border border-purple-200 bg-purple-50/40 rounded-xl space-y-3">
-                  <div className="flex items-center justify-between text-xs font-bold text-slate-800">
-                    <span className="flex items-center gap-1.5">
-                      <CreditCard className="h-4 w-4 text-purple-600" />
-                      Add New Card &amp; Pay
-                    </span>
-                    <Badge variant="outline" className="text-[10px] bg-white border-purple-200 text-purple-700">
-                      Stripe 256-Bit SSL
-                    </Badge>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Input
-                      placeholder="Cardholder Name"
-                      value={newCardForm.holderName}
-                      onChange={(e) =>
-                        setNewCardForm({ ...newCardForm, holderName: e.target.value })
-                      }
-                      className="h-9 text-xs bg-white border-slate-200 rounded-lg"
-                    />
-                    <div className="relative">
-                      <Input
-                        placeholder="Card Number (4242 4242 4242 4242)"
-                        value={newCardForm.number}
-                        onChange={(e) =>
-                          setNewCardForm({ ...newCardForm, number: e.target.value })
+                <Elements stripe={stripePromise}>
+                  <StripeCardForm
+                    userEmail={userEmail}
+                    setAsPrimary={setNewCardAsPrimary}
+                    setSetAsPrimary={setSetNewCardAsPrimary}
+                    onSuccess={(newCard) => {
+                      setSavedCards((prev) => {
+                        if (setNewCardAsPrimary) {
+                          return [...prev.map((c) => ({ ...c, isPrimary: false })), newCard];
                         }
-                        maxLength={19}
-                        className="h-9 text-xs bg-white border-slate-200 rounded-lg pr-12 font-mono"
-                      />
-                      <span className="absolute right-2.5 top-2.5 text-[10px] font-bold text-slate-400 uppercase">
-                        {newCardForm.number.startsWith("5") ? "Mastercard" : "Visa"}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-2">
-                      <Input
-                        placeholder="MM (08)"
-                        value={newCardForm.expMonth}
-                        onChange={(e) =>
-                          setNewCardForm({ ...newCardForm, expMonth: e.target.value })
-                        }
-                        maxLength={2}
-                        className="h-9 text-xs bg-white border-slate-200 rounded-lg font-mono text-center"
-                      />
-                      <Input
-                        placeholder="YY (28)"
-                        value={newCardForm.expYear}
-                        onChange={(e) =>
-                          setNewCardForm({ ...newCardForm, expYear: e.target.value })
-                        }
-                        maxLength={4}
-                        className="h-9 text-xs bg-white border-slate-200 rounded-lg font-mono text-center"
-                      />
-                      <Input
-                        placeholder="CVC (123)"
-                        type="password"
-                        value={newCardForm.cvc}
-                        onChange={(e) =>
-                          setNewCardForm({ ...newCardForm, cvc: e.target.value })
-                        }
-                        maxLength={4}
-                        className="h-9 text-xs bg-white border-slate-200 rounded-lg font-mono text-center"
-                      />
-                    </div>
-
-                    <div className="pt-1 flex items-center justify-between">
-                      <label className="flex items-center space-x-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={setNewCardAsPrimary}
-                          onChange={(e) => setSetNewCardAsPrimary(e.target.checked)}
-                          className="rounded border-slate-300 text-purple-600 focus:ring-purple-500 h-3.5 w-3.5"
-                        />
-                        <span className="text-[11px] font-semibold text-slate-700">
-                          Set as Primary Card for Auto-Pay
-                        </span>
-                      </label>
-                    </div>
-                  </div>
-                </div>
+                        return [...prev, newCard];
+                      });
+                      setSelectedPaymentMethodId(newCard.id);
+                      setIsAddingNewCardInCheckout(false);
+                    }}
+                    submitButtonText="Save Card for Checkout"
+                  />
+                </Elements>
               )}
             </div>
 
@@ -1390,6 +1373,7 @@ function SimpleDomainRow({
   onToggleSelect,
   onToggleAutoPay,
   onToggleProtection,
+  onToggleToa,
   onUpdatePeriod,
   onPayNow,
   getDomainTotal,
@@ -1399,6 +1383,7 @@ function SimpleDomainRow({
   onToggleSelect: () => void;
   onToggleAutoPay: () => void;
   onToggleProtection: () => void;
+  onToggleToa: () => void;
   onUpdatePeriod: (years: number) => void;
   onPayNow: () => void;
   getDomainTotal: (item: DomainPaymentInfo) => number;
@@ -1541,7 +1526,7 @@ function SimpleDomainRow({
         </div>
 
         {/* Addons Bar */}
-        <div className="pt-2 flex flex-col lg:flex-row border-t border-slate-100/80 flex flex-col xs:flex-row items-stretch xs:items-center justify-between gap-2 text-[10px] sm:text-[11px]">
+        <div className="pt-2 flex flex-col lg:flex-row border-t border-slate-100/80 items-stretch xs:items-center justify-between gap-2 text-[10px] sm:text-[11px]">
           {/* Wildcard SSL */}
           <div className="flex items-center space-x-1.5 bg-emerald-50/70 border border-emerald-200 text-emerald-800 px-2.5 py-1 rounded-lg font-medium justify-between xs:justify-start">
             <div className="flex items-center space-x-1.5">
@@ -1550,7 +1535,6 @@ function SimpleDomainRow({
             </div>
             <span className="font-bold text-emerald-700 ml-1">+$29/yr</span>
           </div>
-
           {/* Domain Protection */}
           {!isHealthy ? (
             <button
@@ -1574,6 +1558,31 @@ function SimpleDomainRow({
               <span>Domain Protection ($49/yr Active)</span>
             </div>
           )}
+
+          {/* TOA (Total Ownership Assurance) */}
+          {!isHealthy ? (
+            <button
+              onClick={onToggleToa}
+              className={`flex items-center justify-between xs:justify-start space-x-1.5 px-2.5 py-1 rounded-lg border font-medium transition-all ${(domain.toaEnabled ?? true)
+                  ? "bg-purple-50/70 border-purple-200 text-purple-900 shadow-2xs"
+                  : "bg-slate-50 border-slate-200 text-slate-400 hover:bg-slate-100"
+                }`}
+            >
+              <div className="flex items-center space-x-1.5">
+                <ShieldCheck className={`h-3 w-3 ${(domain.toaEnabled ?? true) ? "text-purple-600" : "text-slate-400"} shrink-0`} />
+                <span>TOA (Total Ownership Assurance)</span>
+              </div>
+              <span className={`font-bold ml-1 ${(domain.toaEnabled ?? true) ? "text-purple-700" : "text-slate-400"}`}>
+                +$500/yr
+              </span>
+            </button>
+          ) : (
+            <div className="flex items-center space-x-1 text-slate-400 text-[10px]">
+              <ShieldCheck className="h-3 w-3 text-purple-600 shrink-0" />
+              <span>TOA ($500/yr Active)</span>
+            </div>
+          )}
+
         </div>
       </div>
     </motion.div>

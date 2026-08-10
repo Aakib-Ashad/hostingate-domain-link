@@ -15,7 +15,6 @@ import {
 } from "@/components/ui/select";
 import { Lock, CreditCard } from "lucide-react";
 import { countries } from "@/lib/utils";
-import { useAuth } from "./providers/auth";
 
 export default function AdvancedCheckoutForm({
   amount,
@@ -32,14 +31,9 @@ export default function AdvancedCheckoutForm({
   const elements = useElements();
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const { email: userEmail } = useAuth();
-  const [email, setEmail] = useState(userEmail ?? "");
+  const [email, setEmail] = useState("domain@hostingate.com");
   const [couponInput, setCouponInput] = useState<string>(coupon ?? "");
   const [couponStatus, setCouponStatus] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (userEmail) setEmail(userEmail);
-  }, [userEmail]);
 
   const cardElementOptions = {
     hidePostalCode: true,

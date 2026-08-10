@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/components/providers/auth";
-import { createBrowserClient } from "@/utils/supabase/client";
+import { createClient } from "@/lib/supabase/client";
 
 export default function AuthPage() {
   const { verifyCodeAndEmail, loading: authLoading } = useAuth();
@@ -15,7 +15,7 @@ export default function AuthPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
-  const supabase = createBrowserClient();
+  const supabase = createClient();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,9 +37,9 @@ export default function AuthPage() {
 
   const fetchData = async () => {
     const { data, error } = await supabase
-    .schema("domain")
-      .from("domain_is_purchased")
-      .select("*");
+      .schema("domain")
+      .from("auth_code")
+      .select("id, code, email");
     if (error) console.log("error is:", error);
     console.log("data is:", data);
   };

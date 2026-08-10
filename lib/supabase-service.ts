@@ -1,11 +1,12 @@
-import { createBrowserClient } from "@/utils/supabase/client";
+
 import {
   DomainSubscriptionRow,
   StripePaymentRow,
 } from "@/types/supabase";
 import { PaymentMethodItem } from "@/lib/utils";
+import { createClient } from "@/lib/supabase/client";
 
-const supabase = createBrowserClient();
+const supabase = createClient();
 
 /**
  * Record a completed Stripe Payment in Supabase (`domain.stripe_payments`)
@@ -29,6 +30,8 @@ export async function recordStripePayment(params: {
   sslPrice?: number;
   domainProtectionEnabled?: boolean;
   domainProtectionPrice?: number;
+  toaEnabled?: boolean;
+  toaPrice?: number;
 }) {
   try {
     const paidAt = new Date().toISOString();
@@ -38,34 +41,50 @@ export async function recordStripePayment(params: {
 
     const amountCents = Math.round(params.amountUsd * 100);
 
-    // 1. Fetch matching payment_method UUID from domain.payment_methods if available
-    let autoPayMethodUuid: string | null = null;
-    let cardLast4 = params.cardLast4 || "4242";
+    const autoPayMethodId = params.paymentMethodId || null;
+    const cardLast4 = params.cardLast4 || "4242";
 
-    if (params.paymentMethodId || params.userEmail) {
-      let pmQuery = supabase
-        .schema("domain")
-        .from("payment_methods")
-        .select("id, stripe_payment_method_id, last4, is_primary")
-        .eq("user_email", params.userEmail);
+    // 2. Upsert domain subscription FIRST (parent record referenced by stripe_payments foreign key)
+    const subscriptionPayload: Partial<DomainSubscriptionRow> = {
+      domain_id: params.domainId,
+      full_domain_name: params.domainName,
+      user_email: params.userEmail,
+      status: "already_paid",
+      period_years: params.periodYears,
+      last_payment_date: paidAt.split("T")[0],
+      next_payment_date: nextPaymentDate,
+      auto_pay_enabled: params.autoPayEnabled ?? true,
+      auto_pay_method: cardLast4 ? `•••• ${cardLast4}` : undefined,
+      auto_pay_method_id: autoPayMethodId,
+    };
 
-      if (params.paymentMethodId) {
-        pmQuery = pmQuery.or(
-          `id.eq.${params.paymentMethodId},stripe_payment_method_id.eq.${params.paymentMethodId}`
-        );
-      } else {
-        pmQuery = pmQuery.eq("is_primary", true);
-      }
+    if (params.renewalPrice !== undefined) subscriptionPayload.renewal_price = params.renewalPrice;
+    if (params.sslPrice !== undefined) subscriptionPayload.ssl_price = params.sslPrice;
+    if (params.domainProtectionEnabled !== undefined) subscriptionPayload.domain_protection_enabled = params.domainProtectionEnabled;
+    if (params.domainProtectionPrice !== undefined) subscriptionPayload.domain_protection_price = params.domainProtectionPrice;
+    if (params.toaEnabled !== undefined) subscriptionPayload.toa_enabled = params.toaEnabled;
+    if (params.toaPrice !== undefined) subscriptionPayload.toa_price = params.toaPrice;
 
-      const { data: pmRecord } = await pmQuery.maybeSingle();
+    const { data: subRecord, error: subErr } = await supabase
+      .schema("domain")
+      .from("domain_subscriptions")
+      .upsert(subscriptionPayload as any, { onConflict: "full_domain_name" })
+      .select("*")
+      .maybeSingle();
 
-      if (pmRecord) {
-        autoPayMethodUuid = pmRecord.id;
-        cardLast4 = pmRecord.last4 || cardLast4;
+    if (subErr) {
+      console.warn("Supabase domain.domain_subscriptions upsert warning:", subErr.message);
+      if (subErr.message.includes("uuid") || subErr.message.includes("auto_pay_method_id") || subErr.message.includes("invalid input syntax")) {
+        const fallbackPayload = { ...subscriptionPayload };
+        delete fallbackPayload.auto_pay_method_id;
+        await supabase
+          .schema("domain")
+          .from("domain_subscriptions")
+          .upsert(fallbackPayload as any, { onConflict: "full_domain_name" });
       }
     }
 
-    // 2. Insert transaction log into `domain.stripe_payments`
+    // 3. Insert transaction log into `domain.stripe_payments` SECOND (child log)
     const paymentPayload: StripePaymentRow = {
       payment_intent_id: params.paymentIntentId,
       stripe_customer_id: params.stripeCustomerId || "cus_hostingate",
@@ -94,6 +113,8 @@ export async function recordStripePayment(params: {
         ssl_price: params.sslPrice,
         domain_protection_enabled: params.domainProtectionEnabled,
         domain_protection_price: params.domainProtectionPrice,
+        toa_enabled: params.toaEnabled,
+        toa_price: params.toaPrice,
       },
     };
 
@@ -106,36 +127,6 @@ export async function recordStripePayment(params: {
 
     if (paymentErr) {
       console.warn("Supabase domain.stripe_payments upsert warning:", paymentErr.message);
-    }
-
-    // 3. Upsert domain subscription with next_payment_date, status = 'already_paid', auto_pay_enabled, and auto_pay_method_id
-    const subscriptionPayload: Partial<DomainSubscriptionRow> = {
-      domain_id: params.domainId,
-      full_domain_name: params.domainName,
-      user_email: params.userEmail,
-      status: "already_paid",
-      period_years: params.periodYears,
-      last_payment_date: paidAt.split("T")[0],
-      next_payment_date: nextPaymentDate,
-      auto_pay_enabled: params.autoPayEnabled ?? true,
-      auto_pay_method: cardLast4 ? `•••• ${cardLast4}` : undefined,
-      auto_pay_method_id: autoPayMethodUuid,
-    };
-
-    if (params.renewalPrice !== undefined) subscriptionPayload.renewal_price = params.renewalPrice;
-    if (params.sslPrice !== undefined) subscriptionPayload.ssl_price = params.sslPrice;
-    if (params.domainProtectionEnabled !== undefined) subscriptionPayload.domain_protection_enabled = params.domainProtectionEnabled;
-    if (params.domainProtectionPrice !== undefined) subscriptionPayload.domain_protection_price = params.domainProtectionPrice;
-
-    const { data: subRecord, error: subErr } = await supabase
-      .schema("domain")
-      .from("domain_subscriptions")
-      .upsert(subscriptionPayload as any, { onConflict: "full_domain_name" })
-      .select("*")
-      .single();
-
-    if (subErr) {
-      console.warn("Supabase domain.domain_subscriptions upsert warning:", subErr.message);
     }
 
     return {
@@ -215,7 +206,65 @@ export async function updateDomainAutoPayInDb(params: {
 }
 
 /**
- * Fetch all saved payment methods for a Stripe customer from Stripe API & Supabase `domain` schema.
+ * Toggle or update Domain Protection enabled status for a domain in Supabase `domain` schema.
+ */
+export async function updateDomainProtectionInDb(params: {
+  domainId: string;
+  fullDomainName: string;
+  domainProtectionEnabled: boolean;
+}) {
+  try {
+    const { data, error } = await supabase
+      .schema("domain")
+      .from("domain_subscriptions")
+      .update({
+        domain_protection_enabled: params.domainProtectionEnabled,
+      } as any)
+      .or(`domain_id.eq.${params.domainId},full_domain_name.eq.${params.fullDomainName}`)
+      .select("*")
+      .maybeSingle();
+
+    if (error) {
+      console.warn("Supabase domain protection update warning:", error.message);
+    }
+    return data;
+  } catch (err) {
+    console.error("Error updating domain protection in Supabase:", err);
+    return null;
+  }
+}
+
+/**
+ * Toggle or update TOA (Total Ownership Assurance) enabled status for a domain in Supabase `domain` schema.
+ */
+export async function updateDomainToaInDb(params: {
+  domainId: string;
+  fullDomainName: string;
+  toaEnabled: boolean;
+}) {
+  try {
+    const { data, error } = await supabase
+      .schema("domain")
+      .from("domain_subscriptions")
+      .update({
+        toa_enabled: params.toaEnabled,
+      } as any)
+      .or(`domain_id.eq.${params.domainId},full_domain_name.eq.${params.fullDomainName}`)
+      .select("*")
+      .maybeSingle();
+
+    if (error) {
+      console.warn("Supabase domain TOA update warning:", error.message);
+    }
+    return data;
+  } catch (err) {
+    console.error("Error updating domain TOA in Supabase:", err);
+    return null;
+  }
+}
+
+/**
+ * Fetch all saved payment methods for a Stripe customer from Stripe API.
  */
 export async function fetchUserPaymentMethods(userEmail: string): Promise<PaymentMethodItem[]> {
   try {
@@ -226,39 +275,13 @@ export async function fetchUserPaymentMethods(userEmail: string): Promise<Paymen
       return data.paymentMethods;
     }
   } catch (error) {
-    console.warn("Falling back to direct Supabase fetch for payment methods:", error);
+    console.error("Error fetching payment methods from Stripe API:", error);
   }
-
-  // Fallback to direct Supabase query if API call fails
-  try {
-    const { data, error } = await supabase
-      .schema("domain")
-      .from("payment_methods")
-      .select("*")
-      .eq("user_email", userEmail)
-      .order("is_primary", { ascending: false });
-
-    if (error || !data) {
-      return [];
-    }
-
-    return data.map((row: any) => ({
-      id: row.stripe_payment_method_id || row.id,
-      brand: row.brand as any,
-      last4: row.last4,
-      expMonth: row.exp_month,
-      expYear: row.exp_year,
-      isPrimary: row.is_primary,
-      holderName: row.holder_name || "Cardholder",
-    }));
-  } catch (err) {
-    console.error("Error fetching payment methods:", err);
-    return [];
-  }
+  return [];
 }
 
 /**
- * Save a new payment card to Stripe Customer and Supabase `domain.payment_methods`.
+ * Save a new payment card to Stripe Customer.
  */
 export async function savePaymentMethodToDb(card: PaymentMethodItem, userEmail: string): Promise<PaymentMethodItem | null> {
   try {
@@ -284,14 +307,14 @@ export async function savePaymentMethodToDb(card: PaymentMethodItem, userEmail: 
       }
     }
   } catch (err) {
-    console.warn("Stripe API save card error, falling back to direct Supabase:", err);
+    console.warn("Stripe API save card error:", err);
   }
 
   return card;
 }
 
 /**
- * Set primary default payment method on Stripe Customer and in Supabase `domain` schema.
+ * Set primary default payment method on Stripe Customer.
  */
 export async function setPrimaryPaymentMethodInDb(cardId: string, userEmail: string) {
   try {
@@ -305,24 +328,6 @@ export async function setPrimaryPaymentMethodInDb(cardId: string, userEmail: str
     });
   } catch (error) {
     console.error("Error updating primary card via Stripe API:", error);
-  }
-
-  try {
-    // Also sync in Supabase directly
-    await supabase
-      .schema("domain")
-      .from("payment_methods")
-      .update({ is_primary: false } as any)
-      .eq("user_email", userEmail);
-
-    await supabase
-      .schema("domain")
-      .from("payment_methods")
-      .update({ is_primary: true } as any)
-      .or(`id.eq.${cardId},stripe_payment_method_id.eq.${cardId}`)
-      .eq("user_email", userEmail);
-  } catch (err) {
-    console.warn("Supabase primary card sync warning:", err);
   }
 }
 

@@ -1,86 +1,67 @@
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
-import { createClient } from "@supabase/supabase-js";
 import { isCardExpired } from "@/lib/utils";
+import { getOrCreateStripeCustomer } from "@/lib/stripe-customer";
+import { createClient } from "@/lib/supabase/client";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: "2025-08-27.basil",
 });
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  { db: { schema: "domain" } }
-);
+const supabase = createClient();
 
 export async function GET(req: Request) {
   return POST(req);
 }
 
 /**
- * Helper to resolve customer ID and valid payment cards (ordered by Primary first, then newest)
+ * Helper to resolve customer ID and valid payment cards from Stripe API (Primary first, then secondary)
  */
-async function getCustomerAndCardsForUser(userEmail: string) {
+async function getCustomerAndCardsForUser() {
   let customerId: string | undefined;
 
-  const { data: customerRecord } = await supabase
-    .from("customers")
-    .select("stripe_customer_id")
-    .eq("user_email", userEmail)
-    .maybeSingle();
-
-  if (customerRecord?.stripe_customer_id) {
-    customerId = customerRecord.stripe_customer_id;
-  } else {
-    const { data: cardRecord } = await supabase
-      .from("payment_methods")
-      .select("stripe_customer_id")
-      .eq("user_email", userEmail)
-      .limit(1)
-      .maybeSingle();
-
-    if (cardRecord?.stripe_customer_id) {
-      customerId = cardRecord.stripe_customer_id;
-    } else {
-      try {
-        const stripeCustomers = await stripe.customers.list({ email: userEmail, limit: 1 });
-        if (stripeCustomers.data.length > 0) {
-          customerId = stripeCustomers.data[0].id;
-        }
-      } catch (e) {
-        console.warn("Could not query Stripe API for customer fallback:", e);
-      }
-    }
-
-    if (customerId) {
-      await supabase.from("customers").upsert(
-        {
-          user_email: userEmail,
-          stripe_customer_id: customerId,
-        } as any,
-        { onConflict: "user_email" }
-      );
-    }
+  try {
+    const customer = await getOrCreateStripeCustomer();
+    customerId = customer.id;
+  } catch (e) {
+    console.warn("Failed to get/create customer in auto-pay:", e);
   }
 
   if (!customerId) return null;
 
-  // Fetch all saved payment cards ordered by primary first
-  const { data: allCards } = await supabase
-    .from("payment_methods")
-    .select("*")
-    .eq("user_email", userEmail)
-    .order("is_primary", { ascending: false })
-    .order("created_at", { ascending: false });
+  try {
+    const customerObj = await stripe.customers.retrieve(customerId);
+    const defaultPmId =
+      !customerObj.deleted && typeof customerObj.invoice_settings?.default_payment_method === "string"
+        ? customerObj.invoice_settings.default_payment_method
+        : null;
 
-  if (!allCards || allCards.length === 0) return null;
+    const pmList = await stripe.paymentMethods.list({
+      customer: customerId,
+      type: "card",
+    });
 
-  // Filter out expired cards
-  const validCards = allCards.filter((card) => !isCardExpired(card.exp_month, card.exp_year));
+    if (!pmList.data || pmList.data.length === 0) return null;
 
-  if (validCards.length === 0) return null;
+    const validCards = pmList.data
+      .map((pm) => ({
+        id: pm.id,
+        brand: pm.card?.brand || "visa",
+        last4: pm.card?.last4 || "4242",
+        exp_month: pm.card?.exp_month || 12,
+        exp_year: pm.card?.exp_year || 2028,
+        is_primary: defaultPmId ? pm.id === defaultPmId : false,
+      }))
+      .filter((card) => !isCardExpired(card.exp_month, card.exp_year))
+      .sort((a, b) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0));
 
-  return { customerId, cards: validCards };
+    if (validCards.length === 0) return null;
+
+    return { customerId, cards: validCards };
+  } catch (err) {
+    console.error("Error retrieving payment methods from Stripe in auto-pay:", err);
+    return null;
+  }
 }
 
 /**
@@ -139,7 +120,7 @@ export async function POST(req: Request) {
     const processedResults = [];
 
     for (const domain of domains) {
-      const userAuth = await getCustomerAndCardsForUser(domain.user_email);
+      const userAuth = await getCustomerAndCardsForUser();
       if (!userAuth || !userAuth.cards.length) {
         console.error(`Auto-Pay skipped for ${domain.full_domain_name}: No valid payment cards for ${domain.user_email}`);
 
@@ -153,7 +134,9 @@ export async function POST(req: Request) {
 
       const { customerId, cards } = userAuth;
       const years = domain.period_years || 1;
-      const totalAmountUsd = (domain.renewal_price + domain.ssl_price + (domain.domain_protection_enabled ? domain.domain_protection_price : 0)) * years;
+      const protectionAmt = domain.domain_protection_enabled ? (domain.domain_protection_price || 49) : 0;
+      const toaAmt = (domain.toa_enabled ?? true) ? (domain.toa_price || 500) : 0;
+      const totalAmountUsd = (domain.renewal_price + domain.ssl_price + protectionAmt + toaAmt) * years;
       const totalCents = Math.round(totalAmountUsd * 100);
 
       let paymentIntent: Stripe.PaymentIntent | null = null;
@@ -167,9 +150,13 @@ export async function POST(req: Request) {
             amount: totalCents,
             currency: "usd",
             customer: customerId,
-            payment_method: card.stripe_payment_method_id,
+            payment_method: card.id,
             off_session: true,
             confirm: true,
+            automatic_payment_methods: {
+              enabled: true,
+              allow_redirects: "never",
+            },
             metadata: {
               domain_id: domain.domain_id,
               domain_name: domain.full_domain_name,
@@ -221,7 +208,7 @@ export async function POST(req: Request) {
             amount_usd: totalAmountUsd,
             currency: "usd",
             period_years: years,
-            payment_method_id: successfulCard.stripe_payment_method_id,
+            payment_method_id: successfulCard.id,
             card_brand: successfulCard.brand,
             card_last4: successfulCard.last4,
             status: "succeeded",
@@ -241,19 +228,32 @@ export async function POST(req: Request) {
 
       try {
         // Update next_payment_date in Supabase domain.domain_subscriptions
+        const subPayload: any = {
+          status: "already_paid",
+          last_payment_date: paidAt.split("T")[0],
+          next_payment_date: nextPaymentDate,
+          auto_pay_method: `•••• ${successfulCard.last4}`,
+          auto_pay_method_id: successfulCard.id,
+        };
+
         const { error: subErr } = await supabase
           .from("domain_subscriptions")
-          .update({
-            status: "already_paid",
-            last_payment_date: paidAt.split("T")[0],
-            next_payment_date: nextPaymentDate,
-            auto_pay_method: `•••• ${successfulCard.last4}`,
-            auto_pay_method_id: successfulCard.id,
-          } as any)
-          .eq("id", domain.id);
+          .update(subPayload)
+          .or(`id.eq.${domain.id},domain_id.eq.${domain.domain_id},full_domain_name.eq.${domain.full_domain_name}`);
 
         if (subErr) {
           console.error("Auto-pay domain_subscriptions update error:", subErr.message);
+          if (subErr.message.includes("uuid") || subErr.message.includes("auto_pay_method_id") || subErr.message.includes("invalid input syntax")) {
+            const fallbackPayload = { ...subPayload };
+            delete fallbackPayload.auto_pay_method_id;
+            const { error: retryErr } = await supabase
+              .from("domain_subscriptions")
+              .update(fallbackPayload)
+              .or(`id.eq.${domain.id},domain_id.eq.${domain.domain_id},full_domain_name.eq.${domain.full_domain_name}`);
+            if (retryErr) {
+              console.error("Fallback auto-pay domain_subscriptions update also failed:", retryErr.message);
+            }
+          }
         }
       } catch (err: any) {
         console.error("Exception in auto-pay domain_subscriptions update:", err?.message || err);

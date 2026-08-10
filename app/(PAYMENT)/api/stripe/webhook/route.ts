@@ -1,16 +1,12 @@
+import { createClient } from "@/lib/supabase/client";
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
-import { createClient } from "@supabase/supabase-js";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: "2025-08-27.basil",
 });
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  { db: { schema: "domain" } }
-);
+const supabase = createClient()
 
 export async function POST(req: Request) {
   const body = await req.text();
@@ -38,7 +34,7 @@ export async function POST(req: Request) {
       const paymentIntent = event.data.object as Stripe.PaymentIntent;
       const metadata = paymentIntent.metadata || {};
 
-      const userEmail = metadata.user_email || "domain@hostingate.com";
+      const userEmail = "domain@hostingate.com";
       const domainId = metadata.domain_id || "dom-1";
       const domainName = metadata.domain_name || "sckali.com";
       const periodYears = parseInt(metadata.period_years || "1", 10);
@@ -65,20 +61,6 @@ export async function POST(req: Request) {
           }
         } catch (e) {
           console.warn("Webhook retrieve PM notice:", e);
-        }
-      }
-
-      // Resolve UUID for payment method from domain.payment_methods
-      let pmUuid: string | null = null;
-      if (paymentMethodId) {
-        const { data: pmRecord } = await supabase
-          .from("payment_methods")
-          .select("id")
-          .eq("stripe_payment_method_id", paymentMethodId)
-          .maybeSingle();
-
-        if (pmRecord) {
-          pmUuid = pmRecord.id;
         }
       }
 
@@ -111,7 +93,49 @@ export async function POST(req: Request) {
         const nextPaymentDate = nextDateObj.toISOString().split("T")[0];
 
         try {
-          // Upsert transaction in domain.stripe_payments (composite key payment_intent_id, domain_id allows multi-domain bulk payments)
+          // 1. Update domain.domain_subscriptions FIRST (parent record)
+          const subPayload: any = {
+            domain_id: item.id,
+            full_domain_name: item.name,
+            user_email: userEmail,
+            status: "already_paid",
+            period_years: itemYears,
+            auto_pay_enabled: metadata.auto_pay === "true",
+            auto_pay_method: `•••• ${cardLast4}`,
+            auto_pay_method_id: paymentMethodId,
+            last_payment_date: itemPaidAt.split("T")[0],
+            next_payment_date: nextPaymentDate,
+          };
+
+          if ((item as any).renewalPrice !== undefined) subPayload.renewal_price = (item as any).renewalPrice;
+          if ((item as any).sslPrice !== undefined) subPayload.ssl_price = (item as any).sslPrice;
+          if ((item as any).domainProtectionEnabled !== undefined) subPayload.domain_protection_enabled = (item as any).domainProtectionEnabled;
+          if ((item as any).domainProtectionPrice !== undefined) subPayload.domain_protection_price = (item as any).domainProtectionPrice;
+          if ((item as any).toaEnabled !== undefined) subPayload.toa_enabled = (item as any).toaEnabled;
+          if ((item as any).toaPrice !== undefined) subPayload.toa_price = (item as any).toaPrice;
+
+          const { error: subErr } = await supabase.from("domain_subscriptions").upsert(
+            subPayload,
+            { onConflict: "full_domain_name" }
+          );
+
+          if (subErr) {
+            console.error("Webhook domain_subscriptions upsert error:", subErr.message);
+            if (subErr.message.includes("uuid") || subErr.message.includes("auto_pay_method_id")) {
+              const fallbackPayload = { ...subPayload };
+              delete fallbackPayload.auto_pay_method_id;
+              await supabase.from("domain_subscriptions").upsert(
+                fallbackPayload,
+                { onConflict: "full_domain_name" }
+              );
+            }
+          }
+        } catch (err: any) {
+          console.error("Exception upserting domain_subscriptions in webhook:", err?.message || err);
+        }
+
+        try {
+          // 2. Upsert transaction in domain.stripe_payments SECOND (child log)
           const { error: paymentErr } = await supabase.from("stripe_payments").upsert(
             {
               payment_intent_id: paymentIntent.id,
@@ -140,38 +164,6 @@ export async function POST(req: Request) {
           }
         } catch (err: any) {
           console.error("Exception upserting stripe_payments in webhook:", err?.message || err);
-        }
-
-        try {
-          // Update domain.domain_subscriptions
-          const subPayload: any = {
-            domain_id: item.id,
-            full_domain_name: item.name,
-            user_email: userEmail,
-            status: "already_paid",
-            period_years: itemYears,
-            auto_pay_enabled: metadata.auto_pay === "true",
-            auto_pay_method: `•••• ${cardLast4}`,
-            auto_pay_method_id: pmUuid,
-            last_payment_date: itemPaidAt.split("T")[0],
-            next_payment_date: nextPaymentDate,
-          };
-
-          if ((item as any).renewalPrice !== undefined) subPayload.renewal_price = (item as any).renewalPrice;
-          if ((item as any).sslPrice !== undefined) subPayload.ssl_price = (item as any).sslPrice;
-          if ((item as any).domainProtectionEnabled !== undefined) subPayload.domain_protection_enabled = (item as any).domainProtectionEnabled;
-          if ((item as any).domainProtectionPrice !== undefined) subPayload.domain_protection_price = (item as any).domainProtectionPrice;
-
-          const { error: subErr } = await supabase.from("domain_subscriptions").upsert(
-            subPayload,
-            { onConflict: "full_domain_name" }
-          );
-
-          if (subErr) {
-            console.error("Webhook domain_subscriptions upsert error:", subErr.message);
-          }
-        } catch (err: any) {
-          console.error("Exception upserting domain_subscriptions in webhook:", err?.message || err);
         }
 
         console.log(`Successfully processed payment_intent.succeeded for domain: ${item.name}`);

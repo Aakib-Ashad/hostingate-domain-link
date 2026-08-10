@@ -3,15 +3,15 @@
 import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Shield, Lock, Zap, Database, Globe } from "lucide-react";
-import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import LoadingSkeleton from "./LoadingSkeleton";
 import DomainPaymentDashboard from "./DomainPaymentDashboard";
+import { createClient } from "@/lib/supabase/client";
 
 export default function DomainCheckout() {
   const [isLoading, setIsLoading] = useState(true);
   const [userEmail, setUserEmail] = useState<string | null>(null);
 
-  const supabase = createClientComponentClient();
+  const supabase = createClient();
 
   const storeOrFetchPurchase = async () => {
     try {
