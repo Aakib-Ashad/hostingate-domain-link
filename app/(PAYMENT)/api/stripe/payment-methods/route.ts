@@ -11,8 +11,11 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
  * Fetches all saved payment methods attached to Stripe Customer directly from Stripe API
  */
 export async function GET(req: Request) {
+  if(!req){
+    console.log("no Request");
+  }
+  
   try {
-
     // 1. Get or create Stripe Customer
     const customer = await getOrCreateStripeCustomer();
 
