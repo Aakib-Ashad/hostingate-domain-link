@@ -802,7 +802,7 @@ export default function DomainPaymentDashboard() {
           </Button>
 
           {/* Trigger Auto-Pay Engine Button */}
-          <Button
+          {/* <Button
             onClick={handleRunAutoPayNow}
             disabled={isRunningAutoPay}
             variant="outline"
@@ -812,7 +812,7 @@ export default function DomainPaymentDashboard() {
           >
             <Zap className={`h-4 w-4 text-emerald-600 ${isRunningAutoPay ? "animate-spin" : ""}`} />
             <span className="truncate">{isRunningAutoPay ? "Auto-Paying..." : "Run Auto-Pay"}</span>
-          </Button>
+          </Button> */}
 
           {selectedDomainIds.length > 0 && (
             <Button
