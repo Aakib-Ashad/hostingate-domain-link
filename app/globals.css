@@ -143,3 +143,17 @@
     }
   }
 }
+
+/* Force Crisp Toast Title & Description Text Visibility */
+[data-sonner-toast] [data-title] {
+  color: #0f172a !important;
+  font-weight: 700 !important;
+}
+
+[data-sonner-toast] [data-description] {
+  color: #334155 !important;
+  opacity: 1 !important;
+  font-weight: 500 !important;
+  font-size: 0.75rem !important;
+  margin-top: 2px !important;
+}

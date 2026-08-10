@@ -20,7 +20,7 @@ export default function SuccessPage() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const e = params.get("email") || "domain@hostingate.com";
+    const e = "domain@hostingate.com";
     const a = params.get("amount");
     const pi = params.get("payment_intent");
 

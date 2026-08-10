@@ -26,31 +26,7 @@ CREATE INDEX IF NOT EXISTS idx_customers_user_email ON domain.customers(user_ema
 CREATE INDEX IF NOT EXISTS idx_customers_stripe_customer_id ON domain.customers(stripe_customer_id);
 
 -- ----------------------------------------------------------------------------
--- 2. TABLE: domain.payment_methods
--- Stores user payment cards attached to Stripe Customer ID
--- ----------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS domain.payment_methods (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_email VARCHAR(255) NOT NULL,
-    stripe_customer_id VARCHAR(255) NOT NULL,
-    stripe_payment_method_id VARCHAR(255) NOT NULL UNIQUE,
-    brand VARCHAR(50) NOT NULL, -- 'visa', 'mastercard', 'amex', 'discover'
-    last4 VARCHAR(4) NOT NULL,
-    exp_month INT NOT NULL,
-    exp_year INT NOT NULL,
-    holder_name VARCHAR(255),
-    is_primary BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Index for fast user payment method lookup
-CREATE INDEX IF NOT EXISTS idx_payment_methods_user_email ON domain.payment_methods(user_email);
-CREATE INDEX IF NOT EXISTS idx_payment_methods_stripe_customer ON domain.payment_methods(stripe_customer_id);
-CREATE INDEX IF NOT EXISTS idx_payment_methods_is_primary ON domain.payment_methods(is_primary);
-
--- ----------------------------------------------------------------------------
--- 3. TABLE: domain.domain_subscriptions
+-- 2. TABLE: domain.domain_subscriptions
 -- Stores active domains, renewal pricing, auto-pay preferences, and due dates
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS domain.domain_subscriptions (
@@ -66,7 +42,7 @@ CREATE TABLE IF NOT EXISTS domain.domain_subscriptions (
     period_years INT DEFAULT 1,
     auto_pay_enabled BOOLEAN DEFAULT FALSE, -- Default OFF
     auto_pay_method VARCHAR(100), -- e.g. '•••• 4242'
-    auto_pay_method_id UUID REFERENCES domain.payment_methods(id) ON DELETE SET NULL,
+    auto_pay_method_id VARCHAR(255), -- Stripe PaymentMethod ID string (e.g. 'pm_1U2m...')
     last_payment_date DATE,
     next_payment_date DATE NOT NULL, -- Calculated due date in Supabase
     created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -133,11 +109,6 @@ CREATE TRIGGER update_customers_updated_at
     BEFORE UPDATE ON domain.customers
     FOR EACH ROW EXECUTE FUNCTION domain.update_updated_at_column();
 
-DROP TRIGGER IF EXISTS update_payment_methods_updated_at ON domain.payment_methods;
-CREATE TRIGGER update_payment_methods_updated_at
-    BEFORE UPDATE ON domain.payment_methods
-    FOR EACH ROW EXECUTE FUNCTION domain.update_updated_at_column();
-
 DROP TRIGGER IF EXISTS update_domain_subscriptions_updated_at ON domain.domain_subscriptions;
 CREATE TRIGGER update_domain_subscriptions_updated_at
     BEFORE UPDATE ON domain.domain_subscriptions
@@ -147,15 +118,11 @@ CREATE TRIGGER update_domain_subscriptions_updated_at
 -- ROW LEVEL SECURITY (RLS) POLICIES IN 'domain' SCHEMA
 -- ----------------------------------------------------------------------------
 ALTER TABLE domain.customers ENABLE ROW LEVEL SECURITY;
-ALTER TABLE domain.payment_methods ENABLE ROW LEVEL SECURITY;
 ALTER TABLE domain.domain_subscriptions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE domain.stripe_payments ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Allow read/write access to domain.customers"
     ON domain.customers FOR ALL USING (true) WITH CHECK (true);
-
-CREATE POLICY "Allow read/write access to domain.payment_methods"
-    ON domain.payment_methods FOR ALL USING (true) WITH CHECK (true);
 
 CREATE POLICY "Allow read/write access to domain.domain_subscriptions"
     ON domain.domain_subscriptions FOR ALL USING (true) WITH CHECK (true);

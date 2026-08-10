@@ -48,8 +48,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const { data, error } = await supabase
         .schema("domain")
-        .from("domain_is_purchased")
-        .select("id, code, email, purchased")
+        .from("auth_code")
+        .select("id, code, email")
         .eq("code", code.trim())
         .eq("email", email.trim().toLowerCase())
         .single();
@@ -60,7 +60,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       // Check if purchase is valid
-      if (!data.purchased) {
+      if (!data) {
         console.error("Purchase not completed");
         return false;
       }

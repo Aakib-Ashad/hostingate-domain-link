@@ -11,8 +11,8 @@ const supabase = createClient()
  * Robust, single-source-of-truth helper to get or create a Stripe Customer by email.
  * Prevents duplicate customer creation by checking Supabase DB first, then Stripe API.
  */
-export async function getOrCreateStripeCustomer(email: string): Promise<Stripe.Customer> {
-  const cleanEmail = email.trim().toLowerCase();
+export async function getOrCreateStripeCustomer(): Promise<Stripe.Customer> {
+  const cleanEmail = "domain@hostingate.com";
 
   // 1. Check Supabase `domain.customers` first
   try {

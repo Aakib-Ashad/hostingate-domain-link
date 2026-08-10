@@ -15,7 +15,6 @@ export async function POST(req: Request) {
     const {
       amount,
       coupon,
-      email,
       domainId,
       domainName,
       periodYears,
@@ -24,7 +23,7 @@ export async function POST(req: Request) {
       items, // optional array of domains for bulk payment
     } = await req.json();
 
-    const userEmail = email || "domain@hostingate.com";
+    const userEmail = "domain@hostingate.com";
 
     const amountInCents = Math.round(amount * 100);
     if (!Number.isFinite(amountInCents) || amountInCents <= 0) {
@@ -55,25 +54,34 @@ export async function POST(req: Request) {
     }
 
     // 1. Get or create Stripe Customer using single source of truth
-    const customer = await getOrCreateStripeCustomer(userEmail);
+    const customer = await getOrCreateStripeCustomer();
     let customerId = customer.id;
 
     // 2. Resolve Payment Method ID in Stripe
     let targetPmId = paymentMethodId;
 
     if (!targetPmId || !targetPmId.startsWith("pm_")) {
-      // Find existing primary or saved payment method for customer in Supabase
-      const { data: primaryPm } = await supabase
-        .from("payment_methods")
-        .select("stripe_payment_method_id")
-        .eq("user_email", userEmail)
-        .order("is_primary", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      // Find default payment method or first card for customer from Stripe API
+      try {
+        const stripeCust = await stripe.customers.retrieve(customerId);
+        const defaultPmId =
+          !stripeCust.deleted && typeof stripeCust.invoice_settings?.default_payment_method === "string"
+            ? stripeCust.invoice_settings.default_payment_method
+            : null;
 
-      if (primaryPm?.stripe_payment_method_id) {
-        targetPmId = primaryPm.stripe_payment_method_id;
-      } else {
+        if (defaultPmId) {
+          targetPmId = defaultPmId;
+        } else {
+          const pmList = await stripe.paymentMethods.list({ customer: customerId, type: "card", limit: 1 });
+          if (pmList.data.length > 0) {
+            targetPmId = pmList.data[0].id;
+          }
+        }
+      } catch (custErr) {
+        console.warn("Could not retrieve customer payment methods from Stripe:", custErr);
+      }
+
+      if (!targetPmId || !targetPmId.startsWith("pm_")) {
         return NextResponse.json(
           {
             success: false,
@@ -87,8 +95,6 @@ export async function POST(req: Request) {
     // Retrieve card details & owner customer from Stripe API
     let brand = "visa";
     let last4 = "4242";
-    let expMonth = 12;
-    let expYear = 2028;
 
     try {
       const pmDetails = await stripe.paymentMethods.retrieve(targetPmId);
@@ -108,33 +114,10 @@ export async function POST(req: Request) {
       if (pmDetails.card) {
         brand = pmDetails.card.brand || "visa";
         last4 = pmDetails.card.last4 || "4242";
-        expMonth = pmDetails.card.exp_month || 12;
-        expYear = pmDetails.card.exp_year || 2028;
       }
     } catch (e) {
       console.warn("Retrieve PM details warning:", e);
     }
-
-    // 3. Upsert into domain.payment_methods & get Supabase UUID `id`
-    const cardPayload = {
-      user_email: userEmail,
-      stripe_customer_id: customerId,
-      stripe_payment_method_id: targetPmId,
-      brand,
-      last4,
-      exp_month: expMonth,
-      exp_year: expYear,
-      holder_name: "Hostingate Customer",
-      is_primary: true,
-    };
-
-    const { data: dbCardRecord } = await supabase
-      .from("payment_methods")
-      .upsert(cardPayload as any, { onConflict: "stripe_payment_method_id" })
-      .select("id")
-      .single();
-
-    const pmUuid = dbCardRecord?.id || null;
 
     // 4. Build domain items list
     const domainListToProcess: Array<{
@@ -216,7 +199,7 @@ export async function POST(req: Request) {
             period_years: itemYears,
             auto_pay_enabled: isAutoPay,
             auto_pay_method: `•••• ${last4}`,
-            auto_pay_method_id: pmUuid,
+            auto_pay_method_id: targetPmId,
             last_payment_date: paidAt.split("T")[0],
             next_payment_date: nextPaymentDate,
           };
@@ -235,6 +218,17 @@ export async function POST(req: Request) {
 
           if (subErr) {
             console.warn("Supabase domain_subscriptions upsert error in api/payment:", subErr.message);
+            if (subErr.message.includes("uuid") || subErr.message.includes("auto_pay_method_id")) {
+              const fallbackPayload = { ...subPayload };
+              delete fallbackPayload.auto_pay_method_id;
+              const { error: retryErr } = await supabase.from("domain_subscriptions").upsert(
+                fallbackPayload,
+                { onConflict: "full_domain_name" }
+              );
+              if (retryErr) {
+                console.error("Fallback domain_subscriptions upsert also failed:", retryErr.message);
+              }
+            }
           }
 
           // 2. Upsert stripe_payments SECOND (child log referencing domain_subscriptions.domain_id)
@@ -286,7 +280,7 @@ export async function POST(req: Request) {
       clientSecret: paymentIntent.client_secret,
       paymentIntentId: paymentIntent.id,
       paymentMethodId: targetPmId,
-      autoPayMethodId: pmUuid,
+      autoPayMethodId: targetPmId,
       customerId: customerId,
       status: paymentIntent.status,
       finalAmountCents: finalCents,

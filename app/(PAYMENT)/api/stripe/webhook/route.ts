@@ -34,7 +34,7 @@ export async function POST(req: Request) {
       const paymentIntent = event.data.object as Stripe.PaymentIntent;
       const metadata = paymentIntent.metadata || {};
 
-      const userEmail = metadata.user_email || "domain@hostingate.com";
+      const userEmail = "domain@hostingate.com";
       const domainId = metadata.domain_id || "dom-1";
       const domainName = metadata.domain_name || "sckali.com";
       const periodYears = parseInt(metadata.period_years || "1", 10);
@@ -61,20 +61,6 @@ export async function POST(req: Request) {
           }
         } catch (e) {
           console.warn("Webhook retrieve PM notice:", e);
-        }
-      }
-
-      // Resolve UUID for payment method from domain.payment_methods
-      let pmUuid: string | null = null;
-      if (paymentMethodId) {
-        const { data: pmRecord } = await supabase
-          .from("payment_methods")
-          .select("id")
-          .eq("stripe_payment_method_id", paymentMethodId)
-          .maybeSingle();
-
-        if (pmRecord) {
-          pmUuid = pmRecord.id;
         }
       }
 
@@ -116,7 +102,7 @@ export async function POST(req: Request) {
             period_years: itemYears,
             auto_pay_enabled: metadata.auto_pay === "true",
             auto_pay_method: `•••• ${cardLast4}`,
-            auto_pay_method_id: pmUuid,
+            auto_pay_method_id: paymentMethodId,
             last_payment_date: itemPaidAt.split("T")[0],
             next_payment_date: nextPaymentDate,
           };
@@ -135,6 +121,14 @@ export async function POST(req: Request) {
 
           if (subErr) {
             console.error("Webhook domain_subscriptions upsert error:", subErr.message);
+            if (subErr.message.includes("uuid") || subErr.message.includes("auto_pay_method_id")) {
+              const fallbackPayload = { ...subPayload };
+              delete fallbackPayload.auto_pay_method_id;
+              await supabase.from("domain_subscriptions").upsert(
+                fallbackPayload,
+                { onConflict: "full_domain_name" }
+              );
+            }
           }
         } catch (err: any) {
           console.error("Exception upserting domain_subscriptions in webhook:", err?.message || err);

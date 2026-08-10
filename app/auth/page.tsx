@@ -38,8 +38,8 @@ export default function AuthPage() {
   const fetchData = async () => {
     const { data, error } = await supabase
       .schema("domain")
-      .from("domain_is_purchased")
-      .select("*");
+      .from("auth_code")
+      .select("id, code, email");
     if (error) console.log("error is:", error);
     console.log("data is:", data);
   };
