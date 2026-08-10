@@ -218,7 +218,7 @@ export async function POST(req: Request) {
 
           if (subErr) {
             console.warn("Supabase domain_subscriptions upsert error in api/payment:", subErr.message);
-            if (subErr.message.includes("uuid") || subErr.message.includes("auto_pay_method_id")) {
+            if (subErr.message.includes("uuid") || subErr.message.includes("auto_pay_method_id") || subErr.message.includes("invalid input syntax")) {
               const fallbackPayload = { ...subPayload };
               delete fallbackPayload.auto_pay_method_id;
               const { error: retryErr } = await supabase.from("domain_subscriptions").upsert(

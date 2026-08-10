@@ -74,7 +74,7 @@ export async function recordStripePayment(params: {
 
     if (subErr) {
       console.warn("Supabase domain.domain_subscriptions upsert warning:", subErr.message);
-      if (subErr.message.includes("uuid") || subErr.message.includes("auto_pay_method_id")) {
+      if (subErr.message.includes("uuid") || subErr.message.includes("auto_pay_method_id") || subErr.message.includes("invalid input syntax")) {
         const fallbackPayload = { ...subscriptionPayload };
         delete fallbackPayload.auto_pay_method_id;
         await supabase

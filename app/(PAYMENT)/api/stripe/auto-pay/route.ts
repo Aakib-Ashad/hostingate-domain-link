@@ -228,19 +228,32 @@ export async function POST(req: Request) {
 
       try {
         // Update next_payment_date in Supabase domain.domain_subscriptions
+        const subPayload: any = {
+          status: "already_paid",
+          last_payment_date: paidAt.split("T")[0],
+          next_payment_date: nextPaymentDate,
+          auto_pay_method: `•••• ${successfulCard.last4}`,
+          auto_pay_method_id: successfulCard.id,
+        };
+
         const { error: subErr } = await supabase
           .from("domain_subscriptions")
-          .update({
-            status: "already_paid",
-            last_payment_date: paidAt.split("T")[0],
-            next_payment_date: nextPaymentDate,
-            auto_pay_method: `•••• ${successfulCard.last4}`,
-            auto_pay_method_id: successfulCard.id,
-          } as any)
-          .eq("id", domain.id);
+          .update(subPayload)
+          .or(`id.eq.${domain.id},domain_id.eq.${domain.domain_id},full_domain_name.eq.${domain.full_domain_name}`);
 
         if (subErr) {
           console.error("Auto-pay domain_subscriptions update error:", subErr.message);
+          if (subErr.message.includes("uuid") || subErr.message.includes("auto_pay_method_id") || subErr.message.includes("invalid input syntax")) {
+            const fallbackPayload = { ...subPayload };
+            delete fallbackPayload.auto_pay_method_id;
+            const { error: retryErr } = await supabase
+              .from("domain_subscriptions")
+              .update(fallbackPayload)
+              .or(`id.eq.${domain.id},domain_id.eq.${domain.domain_id},full_domain_name.eq.${domain.full_domain_name}`);
+            if (retryErr) {
+              console.error("Fallback auto-pay domain_subscriptions update also failed:", retryErr.message);
+            }
+          }
         }
       } catch (err: any) {
         console.error("Exception in auto-pay domain_subscriptions update:", err?.message || err);
