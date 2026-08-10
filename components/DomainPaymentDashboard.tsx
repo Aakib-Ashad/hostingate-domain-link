@@ -39,6 +39,8 @@ import { toast } from "sonner";
 import { motion } from "framer-motion";
 import {
   updateDomainAutoPayInDb,
+  updateDomainProtectionInDb,
+  updateDomainToaInDb,
   fetchUserPaymentMethods,
   savePaymentMethodToDb,
   setPrimaryPaymentMethodInDb,
@@ -86,6 +88,12 @@ export default function DomainPaymentDashboard() {
                 autoPayEnabled: sub.auto_pay_enabled,
                 autoPayMethod: sub.auto_pay_method || undefined,
                 lastPaymentDate: sub.last_payment_date || item.lastPaymentDate,
+                domainProtectionEnabled: sub.domain_protection_enabled ?? item.domainProtectionEnabled,
+                domainProtectionPrice: sub.domain_protection_price ?? item.domainProtectionPrice,
+                toaEnabled: sub.toa_enabled ?? item.toaEnabled ?? true,
+                toaPrice: sub.toa_price ?? item.toaPrice ?? 500,
+                renewalPrice: sub.renewal_price ?? item.renewalPrice,
+                sslPrice: sub.ssl_price ?? item.sslPrice,
               };
             }
             return item;
@@ -230,7 +238,7 @@ export default function DomainPaymentDashboard() {
     await setPrimaryPaymentMethodInDb(cardId, "domain@hostingate.com");
 
     toast.success("Primary Card Updated!", {
-      description: `${targetCard.brand.toUpperCase()} ending in ${targetCard.last4} is now set as your primary card in Supabase for Auto-Pay renewals.`,
+      description: `${targetCard.brand.toUpperCase()} ending in ${targetCard.last4} is now set as your primary card for Auto-Pay renewals.`,
     });
   };
 
@@ -284,9 +292,7 @@ export default function DomainPaymentDashboard() {
       brand: "visa",
     });
 
-    toast.success("New Payment Card Added!", {
-      description: `${brand.toUpperCase()} ending in ${last4} was saved to Supabase.`,
-    });
+    toast.success("New Payment Card Added!");
 
     return newCard;
   };
@@ -316,15 +322,16 @@ export default function DomainPaymentDashboard() {
     await deletePaymentMethodFromDb(cardId, "domain@hostingate.com");
 
     toast.info("Payment Card Removed", {
-      description: `${cardToDelete.brand.toUpperCase()} ending in ${cardToDelete.last4} was deleted from Supabase.`,
+      description: `${cardToDelete.brand.toUpperCase()} ending in ${cardToDelete.last4} was deleted.`,
     });
   };
 
-  // Calculate total price for a single domain including addons (SSL mandatory $29, Protection optional $49)
+  // Calculate total price for a single domain including addons (SSL mandatory $29, Protection optional $49, TOA optional $500)
   const getDomainItemTotal = (item: DomainPaymentInfo) => {
     const ssl = item.sslPrice || 29;
     const protection = item.domainProtectionEnabled ? item.domainProtectionPrice || 49 : 0;
-    return (item.renewalPrice + ssl + protection) * item.periodYears;
+    const toa = (item.toaEnabled ?? true) ? item.toaPrice || 500 : 0;
+    return (item.renewalPrice + ssl + protection + toa) * item.periodYears;
   };
 
   // Grouped domains
@@ -359,7 +366,7 @@ export default function DomainPaymentDashboard() {
     setSelectedDomainIds(allDueIds);
     setCheckoutTarget("bulk");
     setAutoPayOnCheckout(true);
-    setIsAddingNewCardInCheckout(false);
+    setIsAddingNewCardInCheckout(savedCards.length === 0);
     setIsCheckoutOpen(true);
   };
 
@@ -425,7 +432,7 @@ export default function DomainPaymentDashboard() {
   };
 
   // Toggle Domain Protection ($49 optional) per domain
-  const toggleDomainProtection = (id: string, domainName: string) => {
+  const toggleDomainProtection = async (id: string, domainName: string) => {
     const targetDomain = domainsList.find((d) => d.id === id);
     if (!targetDomain) return;
 
@@ -447,6 +454,45 @@ export default function DomainPaymentDashboard() {
           : "Domain protection disabled.",
       }
     );
+
+    // Sync state directly into Supabase domain_subscriptions
+    await updateDomainProtectionInDb({
+      domainId: id,
+      fullDomainName: domainName,
+      domainProtectionEnabled: nextState,
+    });
+  };
+
+  // Toggle TOA (Total Ownership Assurance $500 optional) per domain
+  const toggleDomainToa = async (id: string, domainName: string) => {
+    const targetDomain = domainsList.find((d) => d.id === id);
+    if (!targetDomain) return;
+
+    const nextState = !(targetDomain.toaEnabled ?? true);
+
+    setDomainsList((prev) =>
+      prev.map((item) =>
+        item.id === id ? { ...item, toaEnabled: nextState } : item
+      )
+    );
+
+    toast.info(
+      nextState
+        ? `TOA (Total Ownership Assurance) Enabled for ${domainName} (+$500/yr)`
+        : `TOA (Total Ownership Assurance) Removed for ${domainName}`,
+      {
+        description: nextState
+          ? "Total ownership assurance activated."
+          : "Standard protection without total ownership assurance.",
+      }
+    );
+
+    // Sync state directly into Supabase domain_subscriptions
+    await updateDomainToaInDb({
+      domainId: id,
+      fullDomainName: domainName,
+      toaEnabled: nextState,
+    });
   };
 
   // Update Year Duration (1 Yr, 2 Yrs, 3 Yrs)
@@ -461,7 +507,7 @@ export default function DomainPaymentDashboard() {
     setSingleCheckoutDomain(domain);
     setCheckoutTarget("single");
     setAutoPayOnCheckout(true);
-    setIsAddingNewCardInCheckout(false);
+    setIsAddingNewCardInCheckout(savedCards.length === 0);
     setIsCheckoutOpen(true);
   };
 
@@ -473,7 +519,7 @@ export default function DomainPaymentDashboard() {
     }
     setCheckoutTarget("bulk");
     setAutoPayOnCheckout(true);
-    setIsAddingNewCardInCheckout(false);
+    setIsAddingNewCardInCheckout(savedCards.length === 0);
     setIsCheckoutOpen(true);
   };
 
@@ -516,6 +562,8 @@ export default function DomainPaymentDashboard() {
         sslPrice: item.sslPrice,
         domainProtectionEnabled: item.domainProtectionEnabled,
         domainProtectionPrice: item.domainProtectionPrice,
+        toaEnabled: item.toaEnabled ?? true,
+        toaPrice: item.toaPrice || 500,
       }));
 
       const paymentRes = await fetch("/api/payment", {
@@ -531,6 +579,8 @@ export default function DomainPaymentDashboard() {
           sslPrice: checkoutItems[0]?.sslPrice,
           domainProtectionEnabled: checkoutItems[0]?.domainProtectionEnabled,
           domainProtectionPrice: checkoutItems[0]?.domainProtectionPrice,
+          toaEnabled: checkoutItems[0]?.toaEnabled ?? true,
+          toaPrice: checkoutItems[0]?.toaPrice || 500,
           paymentMethodId: activeCard?.id,
           autoPayEnabled: autoPayOnCheckout,
           items: itemsPayload,
@@ -544,7 +594,7 @@ export default function DomainPaymentDashboard() {
       }
 
       // Re-fetch updated domain subscriptions from Supabase to sync UI state
-      const dbSubs = await fetchDomainSubscriptions("domain@hostingate.com");
+      const dbSubs = await fetchDomainSubscriptions(userEmail);
       if (dbSubs && dbSubs.length > 0) {
         setDomainsList((prev) =>
           prev.map((item) => {
@@ -564,6 +614,12 @@ export default function DomainPaymentDashboard() {
                 autoPayEnabled: sub.auto_pay_enabled,
                 autoPayMethod: sub.auto_pay_method || undefined,
                 lastPaymentDate: sub.last_payment_date || item.lastPaymentDate,
+                domainProtectionEnabled: sub.domain_protection_enabled ?? item.domainProtectionEnabled,
+                domainProtectionPrice: sub.domain_protection_price ?? item.domainProtectionPrice,
+                toaEnabled: sub.toa_enabled ?? item.toaEnabled ?? true,
+                toaPrice: sub.toa_price ?? item.toaPrice ?? 500,
+                renewalPrice: sub.renewal_price ?? item.renewalPrice,
+                sslPrice: sub.ssl_price ?? item.sslPrice,
               };
             }
             return item;
@@ -596,7 +652,7 @@ export default function DomainPaymentDashboard() {
       const paidIds = checkoutItems.map((d) => d.id);
       setSelectedDomainIds((prev) => prev.filter((id) => !paidIds.includes(id)));
 
-      toast.success("Payment Processed & Saved to Supabase!", {
+      toast.success("Payment Processed", {
         description: `Renewed ${checkoutItems.length} domain(s) using ${cardBrand} ending in ${activeCard?.last4 || "4242"}. Total Paid: $${checkoutTotalAmount.toFixed(
           2
         )}`,
@@ -753,6 +809,7 @@ export default function DomainPaymentDashboard() {
                   onToggleSelect={() => toggleSelectDomain(domain.id)}
                   onToggleAutoPay={() => toggleAutoPay(domain.id, domain.fullDomainName)}
                   onToggleProtection={() => toggleDomainProtection(domain.id, domain.fullDomainName)}
+                  onToggleToa={() => toggleDomainToa(domain.id, domain.fullDomainName)}
                   onUpdatePeriod={(years) => updatePeriodYears(domain.id, years)}
                   onPayNow={() => openSinglePayment(domain)}
                   getDomainTotal={getDomainItemTotal}
@@ -780,6 +837,7 @@ export default function DomainPaymentDashboard() {
                   onToggleSelect={() => toggleSelectDomain(domain.id)}
                   onToggleAutoPay={() => toggleAutoPay(domain.id, domain.fullDomainName)}
                   onToggleProtection={() => toggleDomainProtection(domain.id, domain.fullDomainName)}
+                  onToggleToa={() => toggleDomainToa(domain.id, domain.fullDomainName)}
                   onUpdatePeriod={(years) => updatePeriodYears(domain.id, years)}
                   onPayNow={() => openSinglePayment(domain)}
                   getDomainTotal={getDomainItemTotal}
@@ -807,6 +865,7 @@ export default function DomainPaymentDashboard() {
                   onToggleSelect={() => toggleSelectDomain(domain.id)}
                   onToggleAutoPay={() => toggleAutoPay(domain.id, domain.fullDomainName)}
                   onToggleProtection={() => toggleDomainProtection(domain.id, domain.fullDomainName)}
+                  onToggleToa={() => toggleDomainToa(domain.id, domain.fullDomainName)}
                   onUpdatePeriod={(years) => updatePeriodYears(domain.id, years)}
                   onPayNow={() => openSinglePayment(domain)}
                   getDomainTotal={getDomainItemTotal}
@@ -1131,6 +1190,16 @@ export default function DomainPaymentDashboard() {
                             </span>
                           </div>
                         )}
+                        {(item.toaEnabled ?? true) && (
+                          <div className="flex justify-between text-purple-700 font-medium">
+                            <span className="flex items-center gap-1">
+                              <ShieldCheck className="h-3 w-3 text-purple-600" /> TOA (Total Ownership Assurance)
+                            </span>
+                            <span>
+                              ${((item.toaPrice || 500) * item.periodYears).toFixed(2)}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -1169,22 +1238,24 @@ export default function DomainPaymentDashboard() {
                 <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
                   Payment Method
                 </label>
-                <button
-                  type="button"
-                  onClick={() => setIsAddingNewCardInCheckout(!isAddingNewCardInCheckout)}
-                  className="text-xs font-bold text-purple-600 hover:text-purple-800 flex items-center gap-1"
-                >
-                  {isAddingNewCardInCheckout ? (
-                    "← Use Saved Card"
-                  ) : (
-                    <>
-                      <Plus className="h-3.5 w-3.5" /> Add New Card
-                    </>
-                  )}
-                </button>
+                {savedCards.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setIsAddingNewCardInCheckout(!isAddingNewCardInCheckout)}
+                    className="text-xs font-bold text-purple-600 hover:text-purple-800 flex items-center gap-1"
+                  >
+                    {isAddingNewCardInCheckout ? (
+                      "← Use Saved Card"
+                    ) : (
+                      <>
+                        <Plus className="h-3.5 w-3.5" /> Add New Card
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
 
-              {!isAddingNewCardInCheckout ? (
+              {!isAddingNewCardInCheckout && savedCards.length > 0 ? (
                 /* Saved Cards List Selector */
                 <div className="space-y-2">
                   {savedCards.map((card) => {
@@ -1390,6 +1461,7 @@ function SimpleDomainRow({
   onToggleSelect,
   onToggleAutoPay,
   onToggleProtection,
+  onToggleToa,
   onUpdatePeriod,
   onPayNow,
   getDomainTotal,
@@ -1399,6 +1471,7 @@ function SimpleDomainRow({
   onToggleSelect: () => void;
   onToggleAutoPay: () => void;
   onToggleProtection: () => void;
+  onToggleToa: () => void;
   onUpdatePeriod: (years: number) => void;
   onPayNow: () => void;
   getDomainTotal: (item: DomainPaymentInfo) => number;
@@ -1541,7 +1614,7 @@ function SimpleDomainRow({
         </div>
 
         {/* Addons Bar */}
-        <div className="pt-2 flex flex-col lg:flex-row border-t border-slate-100/80 flex flex-col xs:flex-row items-stretch xs:items-center justify-between gap-2 text-[10px] sm:text-[11px]">
+        <div className="pt-2 flex flex-col lg:flex-row border-t border-slate-100/80 items-stretch xs:items-center justify-between gap-2 text-[10px] sm:text-[11px]">
           {/* Wildcard SSL */}
           <div className="flex items-center space-x-1.5 bg-emerald-50/70 border border-emerald-200 text-emerald-800 px-2.5 py-1 rounded-lg font-medium justify-between xs:justify-start">
             <div className="flex items-center space-x-1.5">
@@ -1551,6 +1624,7 @@ function SimpleDomainRow({
             <span className="font-bold text-emerald-700 ml-1">+$29/yr</span>
           </div>
 
+          <div className="flex flex-col lg:flex-row border-t border-slate-100/80 items-stretch xs:items-center justify-between gap-2 text-[10px] sm:text-[11px]">
           {/* Domain Protection */}
           {!isHealthy ? (
             <button
@@ -1574,6 +1648,32 @@ function SimpleDomainRow({
               <span>Domain Protection ($49/yr Active)</span>
             </div>
           )}
+
+          {/* TOA (Total Ownership Assurance) */}
+          {!isHealthy ? (
+            <button
+              onClick={onToggleToa}
+              className={`flex items-center justify-between xs:justify-start space-x-1.5 px-2.5 py-1 rounded-lg border font-medium transition-all ${(domain.toaEnabled ?? true)
+                  ? "bg-purple-50/70 border-purple-200 text-purple-900 shadow-2xs"
+                  : "bg-slate-50 border-slate-200 text-slate-400 hover:bg-slate-100"
+                }`}
+            >
+              <div className="flex items-center space-x-1.5">
+                <ShieldCheck className={`h-3 w-3 ${(domain.toaEnabled ?? true) ? "text-purple-600" : "text-slate-400"} shrink-0`} />
+                <span>TOA (Total Ownership Assurance)</span>
+              </div>
+              <span className={`font-bold ml-1 ${(domain.toaEnabled ?? true) ? "text-purple-700" : "text-slate-400"}`}>
+                +$500/yr
+              </span>
+            </button>
+          ) : (
+            <div className="flex items-center space-x-1 text-slate-400 text-[10px]">
+              <ShieldCheck className="h-3 w-3 text-purple-600 shrink-0" />
+              <span>TOA ($500/yr Active)</span>
+            </div>
+          )}
+          </div>
+
         </div>
       </div>
     </motion.div>

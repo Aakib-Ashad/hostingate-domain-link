@@ -1,17 +1,14 @@
 // app/api/payment/route.ts
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
-import { createClient } from "@supabase/supabase-js";
+import { getOrCreateStripeCustomer } from "@/lib/stripe-customer";
+import { createClient } from "@/lib/supabase/client";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: "2025-08-27.basil",
 });
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  { db: { schema: "domain" } }
-);
+const supabase = createClient();
 
 export async function POST(req: Request) {
   try {
@@ -57,54 +54,33 @@ export async function POST(req: Request) {
       }
     }
 
-    // 1. Get or create Stripe Customer
-    let customerId: string;
-    const customers = await stripe.customers.list({
-      email: userEmail,
-      limit: 1,
-    });
-
-    if (customers.data.length > 0) {
-      customerId = customers.data[0].id;
-    } else {
-      const customer = await stripe.customers.create({
-        email: userEmail,
-        name: "Hostingate Customer",
-        metadata: {
-          source: "hostingate-domain-portal",
-        },
-      });
-      customerId = customer.id;
-    }
-
-    // Persist customer in domain.customers
-    await supabase.from("customers").upsert(
-      { user_email: userEmail, stripe_customer_id: customerId } as any,
-      { onConflict: "user_email" }
-    );
+    // 1. Get or create Stripe Customer using single source of truth
+    const customer = await getOrCreateStripeCustomer(userEmail);
+    let customerId = customer.id;
 
     // 2. Resolve Payment Method ID in Stripe
     let targetPmId = paymentMethodId;
 
     if (!targetPmId || !targetPmId.startsWith("pm_")) {
-      // Find existing primary payment method for customer in Supabase or Stripe
+      // Find existing primary or saved payment method for customer in Supabase
       const { data: primaryPm } = await supabase
         .from("payment_methods")
         .select("stripe_payment_method_id")
         .eq("user_email", userEmail)
-        .eq("is_primary", true)
+        .order("is_primary", { ascending: false })
+        .limit(1)
         .maybeSingle();
 
       if (primaryPm?.stripe_payment_method_id) {
         targetPmId = primaryPm.stripe_payment_method_id;
       } else {
-        // Create test card payment method attached to customer for sandbox testing
-        const pm = await stripe.paymentMethods.create({
-          type: "card",
-          card: { token: "tok_visa" },
-          billing_details: { email: userEmail, name: "Hostingate Customer" },
-        });
-        targetPmId = pm.id;
+        return NextResponse.json(
+          {
+            success: false,
+            error: "No payment card specified. Please add a valid payment card to complete your payment.",
+          },
+          { status: 400 }
+        );
       }
     }
 
@@ -170,8 +146,10 @@ export async function POST(req: Request) {
       sslPrice?: number;
       domainProtectionEnabled?: boolean;
       domainProtectionPrice?: number;
+      toaEnabled?: boolean;
+      toaPrice?: number;
     }> = Array.isArray(items) && items.length > 0
-      ? items.map((i: any) => ({
+        ? items.map((i: any) => ({
           id: i.domainId || i.id,
           name: i.domainName || i.fullDomainName,
           years: i.periodYears || periodYears || 1,
@@ -180,8 +158,10 @@ export async function POST(req: Request) {
           sslPrice: i.sslPrice,
           domainProtectionEnabled: i.domainProtectionEnabled,
           domainProtectionPrice: i.domainProtectionPrice,
+          toaEnabled: i.toaEnabled,
+          toaPrice: i.toaPrice,
         }))
-      : [
+        : [
           {
             id: domainId || "dom-1",
             name: domainName || "sckali.com",
@@ -199,8 +179,11 @@ export async function POST(req: Request) {
       customer: customerId,
       payment_method: targetPmId,
       confirm: true,
-      off_session: true,
       setup_future_usage: "off_session",
+      automatic_payment_methods: {
+        enabled: true,
+        allow_redirects: "never",
+      },
       metadata: {
         domain_id: domainId || domainListToProcess[0]?.id || "domain-payment",
         domain_name: domainName || domainListToProcess[0]?.name || "domain-renewal",
@@ -224,6 +207,37 @@ export async function POST(req: Request) {
         const nextPaymentDate = nextDateObj.toISOString().split("T")[0];
 
         try {
+          // 1. Upsert domain_subscriptions FIRST (parent record)
+          const subPayload: any = {
+            domain_id: item.id,
+            full_domain_name: item.name,
+            user_email: userEmail,
+            status: "already_paid",
+            period_years: itemYears,
+            auto_pay_enabled: isAutoPay,
+            auto_pay_method: `•••• ${last4}`,
+            auto_pay_method_id: pmUuid,
+            last_payment_date: paidAt.split("T")[0],
+            next_payment_date: nextPaymentDate,
+          };
+
+          if (item.renewalPrice !== undefined) subPayload.renewal_price = item.renewalPrice;
+          if (item.sslPrice !== undefined) subPayload.ssl_price = item.sslPrice;
+          if (item.domainProtectionEnabled !== undefined) subPayload.domain_protection_enabled = item.domainProtectionEnabled;
+          if (item.domainProtectionPrice !== undefined) subPayload.domain_protection_price = item.domainProtectionPrice;
+          if (item.toaEnabled !== undefined) subPayload.toa_enabled = item.toaEnabled;
+          if (item.toaPrice !== undefined) subPayload.toa_price = item.toaPrice;
+
+          const { error: subErr } = await supabase.from("domain_subscriptions").upsert(
+            subPayload,
+            { onConflict: "full_domain_name" }
+          );
+
+          if (subErr) {
+            console.warn("Supabase domain_subscriptions upsert error in api/payment:", subErr.message);
+          }
+
+          // 2. Upsert stripe_payments SECOND (child log referencing domain_subscriptions.domain_id)
           const { error: stripeErr } = await supabase.from("stripe_payments").upsert(
             {
               payment_intent_id: paymentIntent.id,
@@ -251,6 +265,8 @@ export async function POST(req: Request) {
                 ssl_price: item.sslPrice,
                 domain_protection_enabled: item.domainProtectionEnabled,
                 domain_protection_price: item.domainProtectionPrice,
+                toa_enabled: item.toaEnabled,
+                toa_price: item.toaPrice,
               },
             } as any,
             { onConflict: "payment_intent_id, domain_id" }
@@ -258,33 +274,6 @@ export async function POST(req: Request) {
 
           if (stripeErr) {
             console.warn("Supabase stripe_payments upsert error in api/payment:", stripeErr.message);
-          }
-
-          const subPayload: any = {
-            domain_id: item.id,
-            full_domain_name: item.name,
-            user_email: userEmail,
-            status: "already_paid",
-            period_years: itemYears,
-            auto_pay_enabled: isAutoPay,
-            auto_pay_method: `•••• ${last4}`,
-            auto_pay_method_id: pmUuid,
-            last_payment_date: paidAt.split("T")[0],
-            next_payment_date: nextPaymentDate,
-          };
-
-          if (item.renewalPrice !== undefined) subPayload.renewal_price = item.renewalPrice;
-          if (item.sslPrice !== undefined) subPayload.ssl_price = item.sslPrice;
-          if (item.domainProtectionEnabled !== undefined) subPayload.domain_protection_enabled = item.domainProtectionEnabled;
-          if (item.domainProtectionPrice !== undefined) subPayload.domain_protection_price = item.domainProtectionPrice;
-
-          const { error: subErr } = await supabase.from("domain_subscriptions").upsert(
-            subPayload,
-            { onConflict: "full_domain_name" }
-          );
-
-          if (subErr) {
-            console.warn("Supabase domain_subscriptions upsert error in api/payment:", subErr.message);
           }
         } catch (dbErr) {
           console.error("DB persistence error in api/payment route:", dbErr);

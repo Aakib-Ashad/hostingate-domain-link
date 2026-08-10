@@ -1,40 +1,13 @@
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
-import { createClient } from "@supabase/supabase-js";
+import { getOrCreateStripeCustomer } from "@/lib/stripe-customer";
+import { createClient } from "@/lib/supabase/client";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: "2025-08-27.basil",
 });
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  { db: { schema: "domain" } }
-);
-
-/**
- * Helper to get or create a Stripe Customer by email
- */
-async function getOrCreateStripeCustomer(email: string) {
-  const customers = await stripe.customers.list({
-    email: email,
-    limit: 1,
-  });
-
-  if (customers.data.length > 0) {
-    return customers.data[0];
-  }
-
-  const customer = await stripe.customers.create({
-    email: email,
-    name: "Hostingate Customer",
-    metadata: {
-      portal: "domain-payment-portal",
-    },
-  });
-
-  return customer;
-}
+const supabase = createClient()
 
 /**
  * GET /api/stripe/payment-methods?email=domain@hostingate.com

@@ -39,6 +39,8 @@ export interface DomainSubscriptionRow {
   ssl_price: number;
   domain_protection_enabled: boolean;
   domain_protection_price: number;
+  toa_enabled?: boolean;
+  toa_price?: number;
   period_years: number;
   auto_pay_enabled: boolean;
   auto_pay_method?: string | null;

@@ -1,7 +1,7 @@
 "use client";
 
+import { createClient } from "@/lib/supabase/client";
 import { createContext, useContext, useState, useEffect } from "react";
-import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 
 interface AuthContextType {
   isAuthenticated: boolean;
@@ -14,7 +14,7 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const supabase = createClientComponentClient();
+  const supabase = createClient();
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [loading, setLoading] = useState(true);
   const [email, setEmail] = useState<string | null>(null);
@@ -47,7 +47,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     try {
       const { data, error } = await supabase
-      .schema("domain")
+        .schema("domain")
         .from("domain_is_purchased")
         .select("id, code, email, purchased")
         .eq("code", code.trim())

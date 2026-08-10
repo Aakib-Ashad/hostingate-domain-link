@@ -5,7 +5,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CheckCircle, Zap, Shield, Globe, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { createBrowserClient } from "@/utils/supabase/client";
+import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
 
 export default function SuccessPage() {
@@ -16,7 +16,7 @@ export default function SuccessPage() {
   const [nextPaymentDate, setNextPaymentDate] = useState<string>("");
   const [loading, setLoading] = useState(true);
 
-  const supabase = createBrowserClient();
+  const supabase = createClient();
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);

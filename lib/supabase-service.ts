@@ -1,11 +1,12 @@
-import { createBrowserClient } from "@/utils/supabase/client";
+
 import {
   DomainSubscriptionRow,
   StripePaymentRow,
 } from "@/types/supabase";
 import { PaymentMethodItem } from "@/lib/utils";
+import { createClient } from "@/lib/supabase/client";
 
-const supabase = createBrowserClient();
+const supabase = createClient();
 
 /**
  * Record a completed Stripe Payment in Supabase (`domain.stripe_payments`)
@@ -29,6 +30,8 @@ export async function recordStripePayment(params: {
   sslPrice?: number;
   domainProtectionEnabled?: boolean;
   domainProtectionPrice?: number;
+  toaEnabled?: boolean;
+  toaPrice?: number;
 }) {
   try {
     const paidAt = new Date().toISOString();
@@ -65,7 +68,39 @@ export async function recordStripePayment(params: {
       }
     }
 
-    // 2. Insert transaction log into `domain.stripe_payments`
+    // 2. Upsert domain subscription FIRST (parent record referenced by stripe_payments foreign key)
+    const subscriptionPayload: Partial<DomainSubscriptionRow> = {
+      domain_id: params.domainId,
+      full_domain_name: params.domainName,
+      user_email: params.userEmail,
+      status: "already_paid",
+      period_years: params.periodYears,
+      last_payment_date: paidAt.split("T")[0],
+      next_payment_date: nextPaymentDate,
+      auto_pay_enabled: params.autoPayEnabled ?? true,
+      auto_pay_method: cardLast4 ? `•••• ${cardLast4}` : undefined,
+      auto_pay_method_id: autoPayMethodUuid,
+    };
+
+    if (params.renewalPrice !== undefined) subscriptionPayload.renewal_price = params.renewalPrice;
+    if (params.sslPrice !== undefined) subscriptionPayload.ssl_price = params.sslPrice;
+    if (params.domainProtectionEnabled !== undefined) subscriptionPayload.domain_protection_enabled = params.domainProtectionEnabled;
+    if (params.domainProtectionPrice !== undefined) subscriptionPayload.domain_protection_price = params.domainProtectionPrice;
+    if (params.toaEnabled !== undefined) subscriptionPayload.toa_enabled = params.toaEnabled;
+    if (params.toaPrice !== undefined) subscriptionPayload.toa_price = params.toaPrice;
+
+    const { data: subRecord, error: subErr } = await supabase
+      .schema("domain")
+      .from("domain_subscriptions")
+      .upsert(subscriptionPayload as any, { onConflict: "full_domain_name" })
+      .select("*")
+      .single();
+
+    if (subErr) {
+      console.warn("Supabase domain.domain_subscriptions upsert warning:", subErr.message);
+    }
+
+    // 3. Insert transaction log into `domain.stripe_payments` SECOND (child log)
     const paymentPayload: StripePaymentRow = {
       payment_intent_id: params.paymentIntentId,
       stripe_customer_id: params.stripeCustomerId || "cus_hostingate",
@@ -94,6 +129,8 @@ export async function recordStripePayment(params: {
         ssl_price: params.sslPrice,
         domain_protection_enabled: params.domainProtectionEnabled,
         domain_protection_price: params.domainProtectionPrice,
+        toa_enabled: params.toaEnabled,
+        toa_price: params.toaPrice,
       },
     };
 
@@ -106,36 +143,6 @@ export async function recordStripePayment(params: {
 
     if (paymentErr) {
       console.warn("Supabase domain.stripe_payments upsert warning:", paymentErr.message);
-    }
-
-    // 3. Upsert domain subscription with next_payment_date, status = 'already_paid', auto_pay_enabled, and auto_pay_method_id
-    const subscriptionPayload: Partial<DomainSubscriptionRow> = {
-      domain_id: params.domainId,
-      full_domain_name: params.domainName,
-      user_email: params.userEmail,
-      status: "already_paid",
-      period_years: params.periodYears,
-      last_payment_date: paidAt.split("T")[0],
-      next_payment_date: nextPaymentDate,
-      auto_pay_enabled: params.autoPayEnabled ?? true,
-      auto_pay_method: cardLast4 ? `•••• ${cardLast4}` : undefined,
-      auto_pay_method_id: autoPayMethodUuid,
-    };
-
-    if (params.renewalPrice !== undefined) subscriptionPayload.renewal_price = params.renewalPrice;
-    if (params.sslPrice !== undefined) subscriptionPayload.ssl_price = params.sslPrice;
-    if (params.domainProtectionEnabled !== undefined) subscriptionPayload.domain_protection_enabled = params.domainProtectionEnabled;
-    if (params.domainProtectionPrice !== undefined) subscriptionPayload.domain_protection_price = params.domainProtectionPrice;
-
-    const { data: subRecord, error: subErr } = await supabase
-      .schema("domain")
-      .from("domain_subscriptions")
-      .upsert(subscriptionPayload as any, { onConflict: "full_domain_name" })
-      .select("*")
-      .single();
-
-    if (subErr) {
-      console.warn("Supabase domain.domain_subscriptions upsert warning:", subErr.message);
     }
 
     return {
@@ -210,6 +217,64 @@ export async function updateDomainAutoPayInDb(params: {
     return data;
   } catch (err) {
     console.error("Error updating domain auto-pay in Supabase:", err);
+    return null;
+  }
+}
+
+/**
+ * Toggle or update Domain Protection enabled status for a domain in Supabase `domain` schema.
+ */
+export async function updateDomainProtectionInDb(params: {
+  domainId: string;
+  fullDomainName: string;
+  domainProtectionEnabled: boolean;
+}) {
+  try {
+    const { data, error } = await supabase
+      .schema("domain")
+      .from("domain_subscriptions")
+      .update({
+        domain_protection_enabled: params.domainProtectionEnabled,
+      } as any)
+      .or(`domain_id.eq.${params.domainId},full_domain_name.eq.${params.fullDomainName}`)
+      .select("*")
+      .maybeSingle();
+
+    if (error) {
+      console.warn("Supabase domain protection update warning:", error.message);
+    }
+    return data;
+  } catch (err) {
+    console.error("Error updating domain protection in Supabase:", err);
+    return null;
+  }
+}
+
+/**
+ * Toggle or update TOA (Total Ownership Assurance) enabled status for a domain in Supabase `domain` schema.
+ */
+export async function updateDomainToaInDb(params: {
+  domainId: string;
+  fullDomainName: string;
+  toaEnabled: boolean;
+}) {
+  try {
+    const { data, error } = await supabase
+      .schema("domain")
+      .from("domain_subscriptions")
+      .update({
+        toa_enabled: params.toaEnabled,
+      } as any)
+      .or(`domain_id.eq.${params.domainId},full_domain_name.eq.${params.fullDomainName}`)
+      .select("*")
+      .maybeSingle();
+
+    if (error) {
+      console.warn("Supabase domain TOA update warning:", error.message);
+    }
+    return data;
+  } catch (err) {
+    console.error("Error updating domain TOA in Supabase:", err);
     return null;
   }
 }

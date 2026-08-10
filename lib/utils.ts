@@ -132,6 +132,8 @@ export interface DomainPaymentInfo extends DomainInfo {
   sslPrice: number; // $29 (mandatory, cannot disable)
   domainProtectionEnabled: boolean; // default true (optional)
   domainProtectionPrice: number; // $49
+  toaEnabled: boolean; // default true (optional $500 Total Ownership Assurance)
+  toaPrice: number; // $500
 }
 
 export const domainPaymentItems: DomainPaymentInfo[] = [
@@ -153,6 +155,8 @@ export const domainPaymentItems: DomainPaymentInfo[] = [
     sslPrice: 29,
     domainProtectionEnabled: true,
     domainProtectionPrice: 49,
+    toaEnabled: true,
+    toaPrice: 500,
   },
   {
     id: "dom-2",
@@ -172,6 +176,8 @@ export const domainPaymentItems: DomainPaymentInfo[] = [
     sslPrice: 29,
     domainProtectionEnabled: true,
     domainProtectionPrice: 49,
+    toaEnabled: true,
+    toaPrice: 500,
   },
   {
     id: "dom-3",
@@ -191,6 +197,8 @@ export const domainPaymentItems: DomainPaymentInfo[] = [
     sslPrice: 29,
     domainProtectionEnabled: true,
     domainProtectionPrice: 49,
+    toaEnabled: true,
+    toaPrice: 500,
   },
   {
     id: "dom-4",
@@ -210,6 +218,8 @@ export const domainPaymentItems: DomainPaymentInfo[] = [
     sslPrice: 29,
     domainProtectionEnabled: true,
     domainProtectionPrice: 49,
+    toaEnabled: true,
+    toaPrice: 500,
   },
   {
     id: "dom-5",
@@ -229,6 +239,8 @@ export const domainPaymentItems: DomainPaymentInfo[] = [
     sslPrice: 29,
     domainProtectionEnabled: true,
     domainProtectionPrice: 49,
+    toaEnabled: true,
+    toaPrice: 500,
   },
   {
     id: "dom-6",
@@ -249,6 +261,8 @@ export const domainPaymentItems: DomainPaymentInfo[] = [
     sslPrice: 29,
     domainProtectionEnabled: true,
     domainProtectionPrice: 49,
+    toaEnabled: true,
+    toaPrice: 500,
   },
   {
     id: "dom-7",
@@ -269,6 +283,8 @@ export const domainPaymentItems: DomainPaymentInfo[] = [
     sslPrice: 29,
     domainProtectionEnabled: true,
     domainProtectionPrice: 49,
+    toaEnabled: true,
+    toaPrice: 500,
   },
   {
     id: "dom-8",
@@ -289,6 +305,8 @@ export const domainPaymentItems: DomainPaymentInfo[] = [
     sslPrice: 29,
     domainProtectionEnabled: true,
     domainProtectionPrice: 49,
+    toaEnabled: true,
+    toaPrice: 500,
   },
   {
     id: "dom-9",
@@ -309,6 +327,8 @@ export const domainPaymentItems: DomainPaymentInfo[] = [
     sslPrice: 29,
     domainProtectionEnabled: true,
     domainProtectionPrice: 49,
+    toaEnabled: true,
+    toaPrice: 500,
   },
   {
     id: "dom-10",
@@ -329,6 +349,8 @@ export const domainPaymentItems: DomainPaymentInfo[] = [
     sslPrice: 29,
     domainProtectionEnabled: true,
     domainProtectionPrice: 49,
+    toaEnabled: true,
+    toaPrice: 500,
   },
   {
     id: "dom-11",
@@ -350,6 +372,8 @@ export const domainPaymentItems: DomainPaymentInfo[] = [
     sslPrice: 29,
     domainProtectionEnabled: true,
     domainProtectionPrice: 49,
+    toaEnabled: true,
+    toaPrice: 500,
   },
 ];
 

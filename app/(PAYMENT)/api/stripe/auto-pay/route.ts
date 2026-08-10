@@ -1,17 +1,14 @@
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
-import { createClient } from "@supabase/supabase-js";
 import { isCardExpired } from "@/lib/utils";
+import { getOrCreateStripeCustomer } from "@/lib/stripe-customer";
+import { createClient } from "@/lib/supabase/client";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: "2025-08-27.basil",
 });
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  { db: { schema: "domain" } }
-);
+const supabase = createClient()
 
 export async function GET(req: Request) {
   return POST(req);
@@ -23,44 +20,11 @@ export async function GET(req: Request) {
 async function getCustomerAndCardsForUser(userEmail: string) {
   let customerId: string | undefined;
 
-  const { data: customerRecord } = await supabase
-    .from("customers")
-    .select("stripe_customer_id")
-    .eq("user_email", userEmail)
-    .maybeSingle();
-
-  if (customerRecord?.stripe_customer_id) {
-    customerId = customerRecord.stripe_customer_id;
-  } else {
-    const { data: cardRecord } = await supabase
-      .from("payment_methods")
-      .select("stripe_customer_id")
-      .eq("user_email", userEmail)
-      .limit(1)
-      .maybeSingle();
-
-    if (cardRecord?.stripe_customer_id) {
-      customerId = cardRecord.stripe_customer_id;
-    } else {
-      try {
-        const stripeCustomers = await stripe.customers.list({ email: userEmail, limit: 1 });
-        if (stripeCustomers.data.length > 0) {
-          customerId = stripeCustomers.data[0].id;
-        }
-      } catch (e) {
-        console.warn("Could not query Stripe API for customer fallback:", e);
-      }
-    }
-
-    if (customerId) {
-      await supabase.from("customers").upsert(
-        {
-          user_email: userEmail,
-          stripe_customer_id: customerId,
-        } as any,
-        { onConflict: "user_email" }
-      );
-    }
+  try {
+    const customer = await getOrCreateStripeCustomer(userEmail);
+    customerId = customer.id;
+  } catch (e) {
+    console.warn("Failed to get/create customer in auto-pay:", e);
   }
 
   if (!customerId) return null;
@@ -153,7 +117,9 @@ export async function POST(req: Request) {
 
       const { customerId, cards } = userAuth;
       const years = domain.period_years || 1;
-      const totalAmountUsd = (domain.renewal_price + domain.ssl_price + (domain.domain_protection_enabled ? domain.domain_protection_price : 0)) * years;
+      const protectionAmt = domain.domain_protection_enabled ? (domain.domain_protection_price || 49) : 0;
+      const toaAmt = (domain.toa_enabled ?? true) ? (domain.toa_price || 500) : 0;
+      const totalAmountUsd = (domain.renewal_price + domain.ssl_price + protectionAmt + toaAmt) * years;
       const totalCents = Math.round(totalAmountUsd * 100);
 
       let paymentIntent: Stripe.PaymentIntent | null = null;
@@ -170,6 +136,10 @@ export async function POST(req: Request) {
             payment_method: card.stripe_payment_method_id,
             off_session: true,
             confirm: true,
+            automatic_payment_methods: {
+              enabled: true,
+              allow_redirects: "never",
+            },
             metadata: {
               domain_id: domain.domain_id,
               domain_name: domain.full_domain_name,
