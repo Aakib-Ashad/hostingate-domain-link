@@ -379,18 +379,47 @@ export default function DomainPaymentDashboard() {
     });
   };
 
-  // Calculate total price for a single domain including addons (SSL mandatory $29, Protection optional $49, TOA optional $500)
+  // Calculate total price for a single domain including addons (SSL mandatory $29, Protection optional $49, TOA optional $500, required for urgent)
   const getDomainItemTotal = (item: DomainPaymentInfo) => {
     const ssl = item.sslPrice || 29;
     const protection = item.domainProtectionEnabled ? item.domainProtectionPrice || 49 : 0;
-    const toa = (item.toaEnabled ?? true) ? item.toaPrice || 500 : 0;
+    const isUrgent = item.status === "due";
+    const toa = (isUrgent || (item.toaEnabled ?? true)) ? item.toaPrice || 500 : 0;
     return (item.renewalPrice + ssl + protection + toa) * item.periodYears;
   };
 
+  // Helper to sort domains by closest renewal date (earliest dueDate first)
+  const sortByClosestRenewal = (a: DomainPaymentInfo, b: DomainPaymentInfo) => {
+    const timeA = new Date(a.dueDate).getTime();
+    const timeB = new Date(b.dueDate).getTime();
+    if (!isNaN(timeA) && !isNaN(timeB)) {
+      return timeA - timeB;
+    }
+    return (a.daysRemaining ?? 0) - (b.daysRemaining ?? 0);
+  };
+
+  // Helper to sort healthy domains in opposite order (latest/furthest renewal date first)
+  const sortByFurthestRenewal = (a: DomainPaymentInfo, b: DomainPaymentInfo) => {
+    const timeA = new Date(a.dueDate).getTime();
+    const timeB = new Date(b.dueDate).getTime();
+    if (!isNaN(timeA) && !isNaN(timeB)) {
+      return timeB - timeA;
+    }
+    return (b.daysRemaining ?? 0) - (a.daysRemaining ?? 0);
+  };
+
   // Grouped domains
-  const urgentDomains = domainsList.filter((d) => d.status === "due");
-  const expiringDomains = domainsList.filter((d) => d.status === "closer_to_due");
-  const healthyDomains = domainsList.filter((d) => d.status === "already_paid");
+  // Urgent & Expiring: closest renewal at top
+  const urgentDomains = domainsList
+    .filter((d) => d.status === "due")
+    .sort(sortByClosestRenewal);
+  const expiringDomains = domainsList
+    .filter((d) => d.status === "closer_to_due")
+    .sort(sortByClosestRenewal);
+  // Healthy & Active: opposite order (furthest renewal at top)
+  const healthyDomains = domainsList
+    .filter((d) => d.status === "already_paid")
+    .sort(sortByFurthestRenewal);
 
   // Total cost calculations for "Pay All Due"
   const urgentTotalCost = urgentDomains.reduce(
@@ -521,6 +550,15 @@ export default function DomainPaymentDashboard() {
     const targetDomain = domainsList.find((d) => d.id === id);
     if (!targetDomain) return;
 
+    // Urgent domains cannot disable TOA (Total Ownership Assurance)
+    if (targetDomain.status === "due") {
+      toast.warning(`Total Ownership Assurance is Active for ${domainName}`, {
+        description:
+          "TOA ($500/yr) is mandatory for urgent domains to protect ownership and cannot be disabled.",
+      });
+      return;
+    }
+
     const nextState = !(targetDomain.toaEnabled ?? true);
 
     setDomainsList((prev) =>
@@ -576,11 +614,13 @@ export default function DomainPaymentDashboard() {
     setIsCheckoutOpen(true);
   };
 
-  // Calculate items in checkout modal
+  // Calculate items in checkout modal sorted by closest renewal date
   const checkoutItems =
     checkoutTarget === "single" && singleCheckoutDomain
       ? [singleCheckoutDomain]
-      : domainsList.filter((d) => selectedDomainIds.includes(d.id));
+      : domainsList
+          .filter((d) => selectedDomainIds.includes(d.id))
+          .sort(sortByClosestRenewal);
 
   const checkoutTotalAmount = checkoutItems.reduce(
     (sum, item) => sum + getDomainItemTotal(item),
@@ -609,7 +649,7 @@ export default function DomainPaymentDashboard() {
         sslPrice: item.sslPrice,
         domainProtectionEnabled: item.domainProtectionEnabled,
         domainProtectionPrice: item.domainProtectionPrice,
-        toaEnabled: item.toaEnabled ?? true,
+        toaEnabled: item.status === "due" ? true : (item.toaEnabled ?? true),
         toaPrice: item.toaPrice || 500,
       }));
 
@@ -626,7 +666,7 @@ export default function DomainPaymentDashboard() {
           sslPrice: checkoutItems[0]?.sslPrice,
           domainProtectionEnabled: checkoutItems[0]?.domainProtectionEnabled,
           domainProtectionPrice: checkoutItems[0]?.domainProtectionPrice,
-          toaEnabled: checkoutItems[0]?.toaEnabled ?? true,
+          toaEnabled: checkoutItems[0]?.status === "due" ? true : (checkoutItems[0]?.toaEnabled ?? true),
           toaPrice: checkoutItems[0]?.toaPrice || 500,
           paymentMethodId: activeCard?.id,
           autoPayEnabled: autoPayOnCheckout,
@@ -1168,10 +1208,10 @@ export default function DomainPaymentDashboard() {
                             </span>
                           </div>
                         )}
-                        {(item.toaEnabled ?? true) && (
+                        {(item.status === "due" || (item.toaEnabled ?? true)) && (
                           <div className="flex justify-between text-purple-700 font-medium">
                             <span className="flex items-center gap-1">
-                              <ShieldCheck className="h-3 w-3 text-purple-600" /> TOA (Total Ownership Assurance)
+                              <ShieldCheck className="h-3 w-3 text-purple-600" /> TOA (Total Ownership Assurance){item.status === "due" ? " (Required)" : ""}
                             </span>
                             <span>
                               ${((item.toaPrice || 500) * item.periodYears).toFixed(2)}
@@ -1566,16 +1606,31 @@ function SimpleDomainRow({
             {!isHealthy ? (
               <button
                 onClick={onToggleToa}
-                className={`flex items-center justify-between xs:justify-start space-x-1.5 px-2.5 py-1 rounded-lg border font-medium transition-all ${(domain.toaEnabled ?? true)
-                  ? "bg-purple-50/70 border-purple-200 text-purple-900 shadow-2xs"
-                  : "bg-slate-50 border-slate-200 text-slate-400 hover:bg-slate-100"
-                  }`}
+                title={isUrgent ? "TOA is mandatory and active for urgent domains" : undefined}
+                className={`flex items-center justify-between xs:justify-start space-x-1.5 px-2.5 py-1 rounded-lg border font-medium transition-all ${
+                  isUrgent || (domain.toaEnabled ?? true)
+                    ? "bg-purple-50/70 border-purple-200 text-purple-900 shadow-2xs"
+                    : "bg-slate-50 border-slate-200 text-slate-400 hover:bg-slate-100"
+                }`}
               >
                 <div className="flex items-center space-x-1.5">
-                  <ShieldCheck className={`h-3 w-3 ${(domain.toaEnabled ?? true) ? "text-purple-600" : "text-slate-400"} shrink-0`} />
+                  <ShieldCheck
+                    className={`h-3 w-3 ${
+                      isUrgent || (domain.toaEnabled ?? true) ? "text-purple-600" : "text-slate-400"
+                    } shrink-0`}
+                  />
                   <span>TOA (Total Ownership Assurance)</span>
+                  {isUrgent && (
+                    <span className="text-[9px] font-bold text-purple-700 bg-purple-100/90 border border-purple-200/70 px-1.5 py-0.5 rounded">
+                      Active
+                    </span>
+                  )}
                 </div>
-                <span className={`font-bold ml-1 ${(domain.toaEnabled ?? true) ? "text-purple-700" : "text-slate-400"}`}>
+                <span
+                  className={`font-bold ml-1 ${
+                    isUrgent || (domain.toaEnabled ?? true) ? "text-purple-700" : "text-slate-400"
+                  }`}
+                >
                   +$500/yr
                 </span>
               </button>
